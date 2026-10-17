@@ -1,0 +1,111 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Pendulum Timer</title>
+<style>
+:root{--bg:#fcfcfb;--card:#ffffff;--ink:#0b0b0b;--ink2:#52514e;--grid:#e6e5e0;--s1:#2a78d6;--ref:#9a998f;--fast:#c2410c;--slow:#2a78d6;--ok:#0a8a0a}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232322;--ink:#f0efec;--ink2:#c3c2b7;--grid:#383835;--s1:#3987e5;--ref:#7d7c74;--fast:#f08a4b;--slow:#5aa2f0;--ok:#3cc13c}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,sans-serif;padding:16px;max-width:1000px;margin:auto}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--ink2);font-size:13px}
+.hero{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:14px 16px;margin:14px 0;display:flex;flex-wrap:wrap;gap:12px 32px;align-items:center}
+.hero .big{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.05}
+.hero .lbl{font-size:13px;color:var(--ink2)}
+.clocks{display:grid;grid-template-columns:auto auto;gap:2px 14px;font-variant-numeric:tabular-nums}
+.clocks .t{font-size:22px;font-weight:600}.clocks .k{color:var(--ink2);font-size:13px;align-self:center}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:10px 12px}
+.tile .k{color:var(--ink2);font-size:12px}.tile .v{font-size:24px;font-variant-numeric:tabular-nums;font-weight:600}.tile .u{font-size:12px;color:var(--ink2)}
+.card{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:12px;margin-bottom:14px;position:relative}
+.card h2{font-size:14px;margin:0 0 6px;font-weight:600}canvas{width:100%;height:200px;display:block}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:4px 7px;border-radius:4px;display:none;white-space:nowrap}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+button{font:inherit;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--grid);background:var(--card);color:var(--ink);cursor:pointer}
+a{color:var(--s1)}
+</style></head><body>
+<h1>Pendulum Timer</h1><div class="sub" id="status">connecting...</div>
+<div class="hero">
+ <div><div class="lbl">Clock vs real time</div><div class="big" id="err">-</div><div class="lbl" id="errw">-</div></div>
+ <div class="clocks"><div class="k">Real</div><div class="t" id="treal">-</div><div class="k">Pendulum</div><div class="t" id="tclk">-</div></div>
+ <div style="margin-left:auto"><button onclick="rz()">Re-zero</button></div>
+</div>
+<div class="tiles">
+<div class="tile"><div class="k">Rate (last 30 periods)</div><div class="v" id="rate">-</div><div class="u" id="rateu">s/day</div></div>
+<div class="tile"><div class="k">Rate (since zero)</div><div class="v" id="lrate">-</div><div class="u">s/day</div></div>
+<div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms - target 1000</div></div>
+<div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u">ms (tick vs tock)</div></div>
+<div class="tile"><div class="k">Amplitude (approx)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
+<div class="tile"><div class="k">Beats</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
+</div>
+<div class="card"><h2>Clock vs real time (s) <span class="sub">- above 0 = ahead, whole run</span></h2><canvas id="c0"></canvas><div class="tip" id="t0"></div></div>
+<div class="card"><h2>Period, tick + tock (ms) <span class="sub">- dashed line = 1000 ms</span></h2><canvas id="c1"></canvas><div class="tip" id="t1"></div></div>
+<div class="card"><h2>Amplitude (deg, approx)</h2><canvas id="c2"></canvas><div class="tip" id="t2"></div></div>
+<div class="sub">Raw data: <a href="/data">/data</a> &middot; <a href="/forget" onclick="return confirm('Forget saved Wi-Fi and reboot into setup mode?')">forget Wi-Fi</a></div>
+<script>
+const $=id=>document.getElementById(id);let D=null,recv=0;
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+function fmt(x,d){return (x===null||x===undefined||isNaN(x))?'-':x.toFixed(d)}
+function sgn(x,d){return isNaN(x)?'-':(x>0?'+':x<0?'−':'')+Math.abs(x).toFixed(d||0)}
+function hms(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
+  return (h?h+'h ':'')+(h||m?m+'m ':'')+r.toFixed(h||m?0:1)+'s'}
+function clk(ms){const d=new Date(ms);return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+function draw(cv,pts,ref,xl,col){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
+  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);
+  const L=56,R=10,T=8,B=22,pw=W-L-R,ph=H-T-B;
+  if(pts.length<2){g.fillStyle=css('--ink2');g.font='13px system-ui';g.fillText('waiting for beats...',L,T+20);cv._pts=[];return}
+  const ys=pts.map(p=>p[1]);let lo=Math.min(...ys),hi=Math.max(...ys);if(ref!=null){lo=Math.min(lo,ref);hi=Math.max(hi,ref)}
+  let pad=(hi-lo)*0.1||Math.max(0.5,Math.abs(hi)*0.02);lo-=pad;hi+=pad;
+  const x0=pts[0][0],x1=pts[pts.length-1][0];
+  const X=x=>L+(x1===x0?pw/2:(x-x0)*pw/(x1-x0)),Y=v=>T+ph-(v-lo)/(hi-lo)*ph;
+  const dec=(hi-lo)<2?2:(hi-lo)<20?1:0;
+  g.font='11px system-ui';g.textAlign='right';g.textBaseline='middle';
+  for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=Y(v);g.strokeStyle=css('--grid');g.lineWidth=1;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillStyle=css('--ink2');g.fillText(v.toFixed(dec),L-6,y)}
+  g.textAlign='left';g.textBaseline='alphabetic';g.fillText(xl[0],L,H-6);g.textAlign='right';g.fillText(xl[1],W-R,H-6);
+  if(ref!=null){g.strokeStyle=css('--ref');g.setLineDash([4,4]);g.beginPath();g.moveTo(L,Y(ref));g.lineTo(W-R,Y(ref));g.stroke();g.setLineDash([])}
+  g.strokeStyle=col||css('--s1');g.lineWidth=2;g.lineJoin='round';g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1])));g.stroke();
+  cv._pts=pts.map(p=>({x:X(p[0]),y:Y(p[1]),p}));
+  if(cv._hover!=null&&cv._pts[cv._hover]){const q=cv._pts[cv._hover];g.strokeStyle=css('--ink2');g.lineWidth=1;g.beginPath();g.moveTo(q.x,T);g.lineTo(q.x,T+ph);g.stroke();
+    g.fillStyle=css('--card');g.beginPath();g.arc(q.x,q.y,6,0,7);g.fill();g.fillStyle=col||css('--s1');g.beginPath();g.arc(q.x,q.y,4,0,7);g.fill()}
+}
+function hook(cv,tip,label){
+  cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect(),x=e.clientX-r.left;if(!cv._pts||!cv._pts.length)return;
+    let best=0;cv._pts.forEach((q,i)=>{if(Math.abs(q.x-x)<Math.abs(cv._pts[best].x-x))best=i});cv._hover=best;const q=cv._pts[best];
+    tip.innerHTML=label(q.p,best,cv._pts.length);tip.style.display='block';
+    tip.style.left=Math.max(4,Math.min(q.x+16,r.width-tip.offsetWidth-4))+'px';tip.style.top=(q.y+10)+'px';render()});
+  cv.addEventListener('mouseleave',()=>{cv._hover=null;tip.style.display='none';render()});
+}
+const sw=()=>'<span class="dot" style="background:'+css('--s1')+'"></span>';
+function series(a){return a.map((v,i)=>[i,v])}
+function render(){if(!D)return;
+  const run=D.real/60;
+  draw($('c0'),D.ht.map((t,i)=>[t,D.he[i]]),0,['zero',run<1?(D.real.toFixed(0)+' s'):(run.toFixed(run<10?1:0)+' min')],css(D.err>=0?'--fast':'--slow'));
+  draw($('c1'),series(D.hp),1000,['oldest','newest']);
+  draw($('c2'),series(D.ha),null,['oldest','newest']);
+}
+hook($('c0'),$('t0'),p=>sw()+p[0].toFixed(1)+' min: <b>'+sgn(p[1],2)+'</b> s');
+hook($('c1'),$('t1'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(2)+'</b> ms');
+hook($('c2'),$('t2'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(2)+'</b>&deg;');
+window.addEventListener('resize',render);
+function live(){ // tick the two clocks every 100 ms between fetches
+  if(!D)return;const now=Date.now(),started=D.n>0||D.real>0;
+  $('treal').textContent=clk(now);
+  let e=D.err; if(D.stopped) e-= (now-recv)/1000;   // pendulum stopped: clock falls further behind
+  $('tclk').textContent=started?clk(now+e*1000):'-';
+}
+async function tick(){
+  try{const r=await fetch('/data');D=await r.json();recv=Date.now();
+    const e=D.err;
+    $('err').textContent=D.real>0?sgn(e,2)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
+    $('errw').textContent=D.real>0?(Math.abs(e)<0.005?'on time':(e>0?'ahead':'behind')+' by '+hms(e))+' after '+hms(D.real):'waiting for first beat';
+    $('rate').textContent=D.np?sgn(D.rate):'-';
+    $('rateu').textContent=D.np?'s/day ('+(D.rate>0?'fast':'slow')+' '+hms(D.rate)+'/day)':'s/day';
+    $('lrate').textContent=D.real>10?sgn(D.lrate):'-';
+    $('per').textContent=fmt(D.per,2);$('be').textContent=fmt(D.be,1);
+    $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
+    $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
+    const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
+    $('status').textContent=(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
+    render();live();
+  }catch(e){$('status').textContent='connection lost, retrying...'}
+}
+async function rz(){if(!confirm('Re-zero: set the pendulum clock equal to real time from the next beat?'))return;await fetch('/reset');tick()}
+tick();setInterval(tick,1000);setInterval(live,100);
+</script></body></html>

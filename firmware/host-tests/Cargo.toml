@@ -1,0 +1,11 @@
+[package]
+name = "host-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Runs the hardware-free maths on your PC:  cargo +stable test  (from this folder)
+[dependencies]
+libm = "0.2"
+
+[workspace]
