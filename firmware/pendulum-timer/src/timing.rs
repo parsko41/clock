@@ -27,6 +27,48 @@ pub const HIST_N: usize = 300;
 /// No pass for this long = pendulum stopped.
 pub const STOP_US: u64 = 3_000_000;
 
+/// Works out which sensor level means "blocked" by watching the pendulum swing,
+/// so it doesn't matter whether the flag is in the beam or clear at power-up.
+/// The flag is narrow compared with the swing, so the blocked level is the one
+/// that's held for the *shorter* time. Needs 3 pulses of each level.
+#[derive(Default)]
+pub struct Polarity {
+    last: Option<(u64, bool)>,
+    sum: [u64; 2],
+    n: [u32; 2],
+    /// `Some(true)` = blocked reads HIGH, `Some(false)` = blocked reads LOW.
+    pub blocked_high: Option<bool>,
+}
+
+impl Polarity {
+    pub const fn new() -> Self {
+        Self { last: None, sum: [0; 2], n: [0; 2], blocked_high: None }
+    }
+
+    /// Feed a raw edge (`high` = level after the edge). Returns the decision once made.
+    pub fn edge(&mut self, t_us: u64, high: bool) -> Option<bool> {
+        if self.blocked_high.is_some() {
+            return self.blocked_high;
+        }
+        if let Some((lt, lh)) = self.last {
+            let d = t_us.saturating_sub(lt);
+            let i = lh as usize;
+            if d < 5_000_000 {
+                // ignore long holds (pendulum at rest / being started by hand)
+                self.sum[i] += d;
+                self.n[i] += 1;
+            }
+        }
+        self.last = Some((t_us, high));
+        if self.n[0] >= 3 && self.n[1] >= 3 {
+            let avg_low = self.sum[0] / self.n[0] as u64;
+            let avg_high = self.sum[1] / self.n[1] as u64;
+            self.blocked_high = Some(avg_high < avg_low);
+        }
+        self.blocked_high
+    }
+}
+
 /// What happened on one pass, for logging.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pass {
@@ -241,7 +283,7 @@ impl Timing {
         }
     }
 
-    pub fn json(&self, now_us: u64, beam_blocked: bool, out: &mut String) {
+    pub fn json(&self, now_us: u64, beam_blocked: bool, polarity_known: bool, out: &mut String) {
         let stopped = self.stopped(now_us);
         let real_s = self.t0.map(|t0| now_us.saturating_sub(t0) as f64 / 1e6).unwrap_or(0.0);
         let err = self.live_err(now_us);
@@ -262,7 +304,7 @@ impl Timing {
             out,
             "{{\"n\":{},\"np\":{},\"err\":{:.3},\"real\":{:.2},\"rate\":{:.1},\"lrate\":{:.1},\
              \"per\":{:.3},\"be\":{:.2},\"amp\":{:.3},\"ampmm\":{:.2},\"blk\":{:.2},\"gaps\":{},\
-             \"stopped\":{},\"beam\":{},\"ago\":{},\"up\":{}",
+             \"stopped\":{},\"pol\":{},\"beam\":{},\"ago\":{},\"up\":{}",
             self.beats,
             self.h_n,
             err,
@@ -276,6 +318,7 @@ impl Timing {
             self.last_blocked_ms,
             self.gaps,
             stopped,
+            polarity_known,
             beam_blocked,
             ago,
             now_us / 1000

@@ -54,7 +54,7 @@ mod tests {
         let tm = run(1.090, 15.0, 2.0, 120.0);
         let mut s = String::new();
         let now = 1_000_000 + 120_000_000;
-        tm.json(now, false, &mut s);
+        tm.json(now, false, true, &mut s);
         let per = field(&s, "per");
         let rate = field(&s, "rate");
         let err = field(&s, "err");
@@ -77,10 +77,33 @@ mod tests {
     }
 
     #[test]
+    fn polarity_learned_from_swing_either_way() {
+        // edges as raw levels; blocked = HIGH for one sensor, LOW for another,
+        // and the flag sitting in the beam at power-up
+        for blocked_is_high in [true, false] {
+            let mut pol = Polarity::new();
+            let mut tm = Timing::new();
+            let mut fed = 0;
+            for (t, blocked) in simulate(1.0, 15.0, 0.0, 30.0) {
+                let high = blocked == blocked_is_high;
+                if let Some(bh) = pol.edge(t, high) {
+                    tm.edge(t, high == bh);
+                    fed += 1;
+                }
+            }
+            assert_eq!(pol.blocked_high, Some(blocked_is_high));
+            assert!(fed > 40);
+            let mut s = String::new();
+            tm.json(1_000_000 + 30_000_000, false, true, &mut s);
+            assert!((field(&s, "per") - 1000.0).abs() < 0.5, "{s:.200}");
+        }
+    }
+
+    #[test]
     fn perfect_clock_is_on_time() {
         let tm = run(1.000, 15.0, 0.0, 300.0);
         let mut s = String::new();
-        tm.json(1_000_000 + 300_000_000, false, &mut s);
+        tm.json(1_000_000 + 300_000_000, false, true, &mut s);
         let err = field(&s, "err");
         let rate = field(&s, "rate");
         let be = field(&s, "be");
@@ -101,7 +124,7 @@ mod tests {
         assert!(e < -29.0 && e > -31.5, "stopped err {e}");
         tm.reset();
         let mut s = String::new();
-        tm.json(later, false, &mut s);
+        tm.json(later, false, true, &mut s);
         assert_eq!(field(&s, "n"), 0.0);
         assert_eq!(field(&s, "ago"), -1.0);
     }
@@ -110,7 +133,7 @@ mod tests {
     fn long_run_history_decimates() {
         let tm = run(1.000, 15.0, 0.0, 1200.0); // 2400 beats -> decimated to <=300 points
         let mut s = String::new();
-        tm.json(1_000_000 + 1_200_000_000, false, &mut s);
+        tm.json(1_000_000 + 1_200_000_000, false, true, &mut s);
         let ht = &s[s.find("\"ht\":[").unwrap() + 6..];
         let n = ht[..ht.find(']').unwrap()].split(',').count();
         assert!(n <= HIST_N && n >= HIST_N / 2, "{n} points");

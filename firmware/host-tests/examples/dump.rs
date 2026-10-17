@@ -16,6 +16,6 @@ fn main() {
         t += 10;
     }
     let mut s = String::new();
-    tm.json(end + 200_000, false, &mut s);
+    tm.json(end + 200_000, false, true, &mut s);
     println!("{s}");
 }

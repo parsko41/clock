@@ -102,7 +102,8 @@ async function tick(){
     $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
     $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
     const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
-    $('status').textContent=(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
+    $('status').textContent=!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
+      :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
     render();live();
   }catch(e){$('status').textContent='connection lost, retrying...'}
 }

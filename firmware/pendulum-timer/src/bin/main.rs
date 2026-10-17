@@ -4,7 +4,8 @@
 //!   http://192.168.4.1, pick your network, type the password. It reboots onto it.
 //! - After that: http://pendulum.local (or the IP printed on the serial log).
 //!   /data JSON, /reset re-zero, /forget erase Wi-Fi.
-//! - Keep the beam clear at boot: blocked polarity is taken from the idle level.
+//! - Flag in or out of the beam at boot doesn't matter: which sensor level means
+//!   "blocked" is learned from the first few swings.
 
 #![no_std]
 #![no_main]
@@ -20,7 +21,7 @@ use alloc::{string::String, vec::Vec};
 use core::cell::RefCell;
 use core::fmt::Write as _;
 use core::net::{Ipv4Addr, SocketAddrV4};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use critical_section::Mutex;
 use embassy_executor::Spawner;
@@ -46,7 +47,7 @@ use esp_radio::wifi::{
 };
 use esp_storage::FlashStorage;
 use log::{info, warn};
-use pendulum_timer::{creds, mdns, timing::{GLITCH_US, Timing}};
+use pendulum_timer::{creds, mdns, timing::{GLITCH_US, Polarity, Timing}};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -69,11 +70,11 @@ fn now_us() -> u64 {
 }
 
 // ---------------------------------------------------------------- beam sensor
-// The interrupt only timestamps edges into a ring buffer; `beam_task` does the maths.
+// The interrupt only timestamps raw edges into a ring buffer; `beam_task` works out
+// which level means "blocked" from the swing itself, then does the maths.
 
 struct Beam {
     input: Option<Input<'static>>,
-    blocked_high: bool,
     last_t: u64,
     last_level: bool,
     buf: [(u64, bool); 64],
@@ -83,7 +84,6 @@ struct Beam {
 
 static BEAM: Mutex<RefCell<Beam>> = Mutex::new(RefCell::new(Beam {
     input: None,
-    blocked_high: true,
     last_t: 0,
     last_level: false,
     buf: [(0, false); 64],
@@ -91,6 +91,8 @@ static BEAM: Mutex<RefCell<Beam>> = Mutex::new(RefCell::new(Beam {
     tail: 0,
 }));
 static TIMING: Mutex<RefCell<Timing>> = Mutex::new(RefCell::new(Timing::new()));
+/// 0 = not known yet, 1 = blocked reads LOW, 2 = blocked reads HIGH
+static BLOCKED_LEVEL: AtomicU8 = AtomicU8::new(0);
 
 #[handler]
 #[ram]
@@ -110,23 +112,25 @@ fn beam_isr() {
         }
         b.last_level = level;
         b.last_t = t;
-        let blocked = level == b.blocked_high;
-        b.buf[b.head % 64] = (t, blocked);
+        b.buf[b.head % 64] = (t, level);
         b.head = b.head.wrapping_add(1);
     });
 }
 
 fn beam_blocked_now() -> bool {
+    let bh = match BLOCKED_LEVEL.load(Ordering::Relaxed) {
+        0 => return false,
+        l => l == 2,
+    };
     critical_section::with(|cs| {
-        let mut b = BEAM.borrow_ref_mut(cs);
-        let bh = b.blocked_high;
-        b.input.as_mut().map(|i| i.is_high() == bh).unwrap_or(false)
+        BEAM.borrow_ref_mut(cs).input.as_mut().map(|i| i.is_high() == bh).unwrap_or(false)
     })
 }
 
 #[embassy_executor::task]
 async fn beam_task() {
-    info!("beat  half_ms  period_ms  blocked_ms  rate_s/day  err_s  amp_deg");
+    let mut pol = Polarity::new();
+    info!("Waiting for a few swings to learn which sensor level means 'blocked'...");
     loop {
         loop {
             let edge = critical_section::with(|cs| {
@@ -138,8 +142,15 @@ async fn beam_task() {
                 b.tail = b.tail.wrapping_add(1);
                 Some(e)
             });
-            let Some((t, blocked)) = edge else { break };
-            let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs).edge(t, blocked));
+            let Some((t, high)) = edge else { break };
+            let known = BLOCKED_LEVEL.load(Ordering::Relaxed) != 0;
+            let Some(bh) = pol.edge(t, high) else { continue };
+            if !known {
+                BLOCKED_LEVEL.store(if bh { 2 } else { 1 }, Ordering::Relaxed);
+                info!("Beam blocked = {}", if bh { "HIGH" } else { "LOW" });
+                info!("beat  half_ms  period_ms  blocked_ms  rate_s/day  err_s  amp_deg");
+            }
+            let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs).edge(t, high == bh));
             if let Some(p) = pass {
                 info!(
                     "{}  {:.2}  {:.2}  {:.1}  {:+.0}  {:+.2}  {:.2}",
@@ -168,7 +179,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    // Beam sensor on GPIO22 with pull-up; idle (clear) level decides polarity.
+    // Beam sensor on GPIO22 with pull-up. Flag in or out of the beam at boot is fine.
     let mut io = Io::new(peripherals.IO_MUX);
     io.set_interrupt_handler(beam_isr);
     let mut input = Input::new(peripherals.GPIO22, InputConfig::default().with_pull(Pull::Up));
@@ -176,15 +187,10 @@ async fn main(spawner: Spawner) -> ! {
     critical_section::with(|cs| {
         input.listen(Event::AnyEdge);
         let mut b = BEAM.borrow_ref_mut(cs);
-        b.blocked_high = !idle_high;
         b.last_level = idle_high;
         b.input = Some(input);
     });
-    info!(
-        "Pendulum timer ready. GPIO22 idle = {}, blocked = {}",
-        if idle_high { "HIGH" } else { "LOW" },
-        if idle_high { "LOW" } else { "HIGH" }
-    );
+    info!("Pendulum timer ready. GPIO22 reads {} at boot", if idle_high { "HIGH" } else { "LOW" });
     spawner.spawn(beam_task().unwrap());
 
     creds::init(FlashStorage::new(peripherals.FLASH));
@@ -462,7 +468,8 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
         ("GET", "/data") => {
             let now = now_us();
             let beam = beam_blocked_now();
-            critical_section::with(|cs| TIMING.borrow_ref(cs).json(now, beam, body));
+            let known = BLOCKED_LEVEL.load(Ordering::Relaxed) != 0;
+            critical_section::with(|cs| TIMING.borrow_ref(cs).json(now, beam, known, body));
             send(sock, "200 OK", "application/json", body.as_bytes()).await;
         }
         ("GET", "/reset") => {
