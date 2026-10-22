@@ -1,5 +1,11 @@
-//! Saved Wi-Fi credentials, kept in the first bytes of the `nvs` flash partition.
-//! (Our own tiny record format, not ESP-IDF NVS. Re-flashing the app leaves it alone.)
+//! Saved Wi-Fi credentials, kept in the first bytes of the `nvs` flash partition
+//! (0x9000 with the default partition table). Re-flashing the app leaves it alone.
+//!
+//! Two formats are accepted there; whichever was written last wins:
+//! - a small binary record (`PWF1`), written by the setup hotspot page, or
+//! - a plain-text `wifi.txt` flashed directly with esptool (see `wifitxt.rs`).
+//!
+//! Neither is ESP-IDF NVS; this firmware doesn't use NVS for anything else.
 
 use alloc::string::String;
 use core::cell::RefCell;
@@ -9,6 +15,8 @@ use esp_storage::FlashStorage;
 
 const MAGIC: [u8; 4] = *b"PWF1";
 const LEN: usize = 4 + 1 + 1 + 32 + 64 + 4;
+/// How much of the partition to read when looking for a text file.
+const TEXT_MAX: usize = 512;
 
 static FLASH: Mutex<RefCell<Option<FlashStorage<'static>>>> = Mutex::new(RefCell::new(None));
 
@@ -41,19 +49,29 @@ fn with_nvs<R>(f: impl FnOnce(&mut partitions::FlashRegion<'_, '_>) -> Option<R>
 
 pub fn load() -> Option<Creds> {
     with_nvs(|r| {
-        let mut b = [0u8; LEN];
+        let mut b = [0u8; TEXT_MAX];
         r.read(0, &mut b).ok()?;
-        if b[..4] != MAGIC || checksum(&b[..LEN - 4]) != u32::from_le_bytes(b[LEN - 4..].try_into().ok()?) {
-            return None;
+        if let Some(c) = parse_record(&b[..LEN]) {
+            log::info!("Wi-Fi credentials: saved from setup page");
+            return Some(c);
         }
-        let (sl, pl) = (b[4] as usize, b[5] as usize);
-        if sl == 0 || sl > 32 || pl > 64 {
-            return None;
-        }
-        let ssid = String::from(core::str::from_utf8(&b[6..6 + sl]).ok()?);
-        let pass = String::from(core::str::from_utf8(&b[38..38 + pl]).ok()?);
-        Some(Creds { ssid, pass })
+        let (ssid, pass) = crate::wifitxt::parse(&b)?;
+        log::info!("Wi-Fi credentials: from wifi.txt in flash");
+        Some(Creds { ssid: String::from(ssid), pass: String::from(pass) })
     })
+}
+
+fn parse_record(b: &[u8]) -> Option<Creds> {
+    if b[..4] != MAGIC || checksum(&b[..LEN - 4]) != u32::from_le_bytes(b[LEN - 4..].try_into().ok()?) {
+        return None;
+    }
+    let (sl, pl) = (b[4] as usize, b[5] as usize);
+    if sl == 0 || sl > 32 || pl > 64 {
+        return None;
+    }
+    let ssid = String::from(core::str::from_utf8(&b[6..6 + sl]).ok()?);
+    let pass = String::from(core::str::from_utf8(&b[38..38 + pl]).ok()?);
+    Some(Creds { ssid, pass })
 }
 
 pub fn save(ssid: &str, pass: &str) -> bool {

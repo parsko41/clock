@@ -24,6 +24,7 @@ Flag width and pivot-to-flag distance are constants at the top of `firmware/pend
 | `firmware/pendulum-timer/src/bin/main.rs` | Beam interrupt, Wi-Fi, setup hotspot, HTTP server, mDNS |
 | `firmware/pendulum-timer/src/page.html` | The dashboard |
 | `firmware/pendulum-timer/src/creds.rs` | Saved Wi-Fi credentials (in the `nvs` flash partition) |
+| `firmware/pendulum-timer/src/wifitxt.rs` | Parser for a plain-text `wifi.txt` flashed to that partition |
 | `firmware/pendulum-timer/src/mdns.rs` | Tiny `pendulum.local` responder |
 | `firmware/host-tests/` | Runs the timing and mDNS tests on a PC against a simulated pendulum |
 | `archive/arduino-pendulum-timer/` | The original Arduino sketch (v1), kept for reference |
@@ -56,5 +57,20 @@ cargo test
 ### First boot / Wi-Fi
 
 With no network saved, the board opens an open hotspot named **Pendulum-Setup**. Join it, open `http://192.168.4.1`, pick your network and enter the password. The board then reboots onto your network.
+
+**Or skip the hotspot with a text file.** Copy `firmware/pendulum-timer/wifi.example.txt` to `wifi.txt` (it's gitignored) and fill it in:
+
+```
+ssid=YourNetwork
+pass=YourPassword
+```
+
+Then flash it to the start of the `nvs` partition:
+
+```
+python -m esptool --chip esp32 write_flash 0x9000 wifi.txt
+```
+
+`cargo run` / `espflash flash` leave it alone. The merged `pendulum-timer-esp32.bin` does **not**: it's padded with 0xFF over 0x9000, so after flashing that, flash `wifi.txt` again (two separate commands, merged image first). Whichever was written last wins: the text file or a network saved from the setup page. `/forget` erases both. Leave out `pass` for an open network; lines starting with `#` are ignored.
 
 If the saved network can't be reached (router down, for example), it falls back to the hotspot and retries the saved network after about 5 minutes. To erase the saved network, open `/forget`.

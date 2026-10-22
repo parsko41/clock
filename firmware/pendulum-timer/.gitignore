@@ -24,3 +24,6 @@ target/
 
 # Ignore .DS_Store file in mac
 **/.DS_Store
+
+# Wi-Fi credentials file (see wifi.example.txt)
+wifi.txt

@@ -1,0 +1,4 @@
+# Copy to wifi.txt, fill in, then flash it (the board must be in download mode):
+#   python -m esptool --chip esp32 write_flash 0x9000 wifi.txt
+ssid=YourNetwork
+pass=YourPassword

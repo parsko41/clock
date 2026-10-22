@@ -5,6 +5,8 @@ extern crate alloc;
 pub mod timing;
 #[path = "../../pendulum-timer/src/mdns.rs"]
 pub mod mdns;
+#[path = "../../pendulum-timer/src/wifitxt.rs"]
+pub mod wifitxt;
 
 #[cfg(test)]
 mod tests {
@@ -138,5 +140,50 @@ mod tests {
         let n = ht[..ht.find(']').unwrap()].split(',').count();
         assert!(n <= HIST_N && n >= HIST_N / 2, "{n} points");
         assert!(s.len() < 12_000, "json {} bytes", s.len());
+    }
+}
+
+#[cfg(test)]
+mod wifitxt_tests {
+    use super::wifitxt::parse;
+
+    /// Pad like erased flash after esptool writes the file.
+    fn flash(s: &[u8]) -> Vec<u8> {
+        let mut v = s.to_vec();
+        v.resize(512, 0xFF);
+        v
+    }
+
+    #[test]
+    fn basic() {
+        assert_eq!(parse(&flash(b"ssid=Home\npass=secret\n")), Some(("Home", "secret")));
+    }
+
+    #[test]
+    fn notepad_style() {
+        let f = flash(b"\xEF\xBB\xBF# my wifi\r\n\r\n SSID = My Net \r\nPassword=a=b=c\r\n");
+        assert_eq!(parse(&f), Some(("My Net", "a=b=c")));
+    }
+
+    #[test]
+    fn open_network_and_no_trailing_newline() {
+        assert_eq!(parse(&flash(b"ssid=Cafe")), Some(("Cafe", "")));
+    }
+
+    #[test]
+    fn rejects_junk() {
+        assert_eq!(parse(&[0xFF; 512]), None); // erased
+        assert_eq!(parse(&[0x00; 512]), None); // forgotten
+        assert_eq!(parse(&flash(b"pass=nossid\n")), None);
+        assert_eq!(parse(&flash(b"ssid=\n")), None);
+        assert_eq!(parse(&flash(b"ssid=123456789012345678901234567890123\n")), None); // 33 chars
+        assert_eq!(parse(&flash(b"PWF1\x04\x00garbage")), None); // binary record, not text
+    }
+
+    #[test]
+    fn stops_at_zeroed_bytes() {
+        let mut f = flash(b"ssid=Home\npass=secret\n");
+        f[..106].fill(0); // what /forget does
+        assert_eq!(parse(&f), None);
     }
 }
