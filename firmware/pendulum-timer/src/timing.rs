@@ -267,6 +267,11 @@ impl Timing {
         }
     }
 
+    /// Average of the last few periods in ms (0 until the first period).
+    pub fn avg_period_ms(&self) -> f64 {
+        self.avg_period_ms
+    }
+
     pub fn stopped(&self, now_us: u64) -> bool {
         self.t0.is_some() && now_us.saturating_sub(self.last_pass_us) > STOP_US
     }

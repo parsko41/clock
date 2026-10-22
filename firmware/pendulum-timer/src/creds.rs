@@ -92,3 +92,34 @@ pub fn save(ssid: &str, pass: &str) -> bool {
 pub fn forget() -> bool {
     with_nvs(|r| r.write(0, &[0u8; LEN]).ok()).is_some()
 }
+
+// ---- bob calibration: ms of period change per mm of bob movement (+ = down).
+// Kept in the 2nd 4 KB sector of the nvs partition, so Wi-Fi changes, /forget
+// and flashing wifi.txt at 0x9000 leave it alone.
+
+const CAL_OFF: u32 = 4096;
+const CAL_MAGIC: [u8; 4] = *b"PCAL";
+
+pub fn load_cal() -> Option<f32> {
+    with_nvs(|r| {
+        let mut b = [0u8; 12];
+        r.read(CAL_OFF, &mut b).ok()?;
+        if b[..4] != CAL_MAGIC || checksum(&b[..8]) != u32::from_le_bytes(b[8..12].try_into().ok()?) {
+            return None;
+        }
+        let k = f32::from_le_bytes(b[4..8].try_into().ok()?);
+        k.is_finite().then_some(k)
+    })
+}
+
+/// Save `k` (ms per mm), or erase the calibration with `None`.
+pub fn save_cal(k: Option<f32>) -> bool {
+    let mut b = [0u8; 12];
+    if let Some(k) = k {
+        b[..4].copy_from_slice(&CAL_MAGIC);
+        b[4..8].copy_from_slice(&k.to_le_bytes());
+        let c = checksum(&b[..8]);
+        b[8..12].copy_from_slice(&c.to_le_bytes());
+    }
+    with_nvs(|r| r.write(CAL_OFF, &b).ok()).is_some()
+}

@@ -25,7 +25,8 @@ a{color:var(--s1)}
 <div class="hero">
  <div><div class="lbl">Clock vs real time</div><div class="big" id="err">-</div><div class="lbl" id="errw">-</div></div>
  <div class="clocks"><div class="k">Real</div><div class="t" id="treal">-</div><div class="k">Pendulum</div><div class="t" id="tclk">-</div></div>
- <div title="Simple-pendulum estimate from the 30-period average: L = g&middot;T&sup2;/4&pi;&sup2;. On a real pendulum with a heavy rod, the bob may need to move a bit more than this."><div class="lbl">Move the bob</div><div class="adj" id="adj">-</div><div class="lbl" id="adjw">-</div></div>
+ <div style="max-width:300px"><div class="lbl">Move the bob <span id="adjm"></span></div><div class="adj" id="adj">-</div><div class="lbl" id="adjw">-</div>
+  <div class="lbl" id="calui"></div></div>
  <div style="margin-left:auto"><button onclick="rz()">Re-zero</button></div>
 </div>
 <div class="tiles">
@@ -110,17 +111,32 @@ async function tick(){
     render();live();
   }catch(e){$('status').textContent='connection lost, retrying...'}
 }
-// How far to move the bob so the period becomes exactly PERIOD (1 s).
-// Simple pendulum: L = g T^2 / (4 pi^2), so dL = g (T0^2 - T^2) / (4 pi^2).
+// How far to move the bob so the period becomes 1000 ms.
+// Calibrated (D.k = ms of period per mm, + = bob down): mm = (1000 - per) / k.
+// Otherwise a simple-pendulum estimate: dL = g (T0^2 - T^2) / (4 pi^2),
+// which overstates the move when there's mass above the pivot.
 function bob(){
-  const G=9.80,T0=1.0;
-  if(!D.np||!(D.per>0)){$('adj').textContent='-';$('adjw').textContent='needs a few swings';return}
-  const T=D.per/1000,dmm=G*(T0*T0-T*T)/(4*Math.PI*Math.PI)*1000,a=Math.abs(dmm);
+  const cal=D.k!==null&&D.k!==undefined&&D.k!==0;
+  $('adjm').textContent=cal?'(calibrated)':'(rough estimate)';
+  if(D.cal1)$('calui').innerHTML='Calibrating from '+D.cal1.toFixed(2)+' ms: move the bob a measured amount, wait ~1 min, then <a href="#" onclick="calFinish();return false">Finish</a> &middot; <a href="#" onclick="calCancel();return false">cancel</a>';
+  else $('calui').innerHTML='<a href="#" onclick="calStart();return false">'+(cal?'Recalibrate':'Calibrate')+'</a>'+(cal?' &middot; '+D.k.toFixed(3)+' ms/mm':'');
+  if(!D.np||!(D.per>0)){$('adj').textContent='-';$('adj').style.color='';$('adjw').textContent='needs a few swings';return}
+  let dmm;
+  if(cal)dmm=(1000-D.per)/D.k;
+  else{const G=9.80,T0=1.0,T=D.per/1000;dmm=G*(T0*T0-T*T)/(4*Math.PI*Math.PI)*1000}
+  const a=Math.abs(dmm);
   if(a<0.05){$('adj').textContent='on rate';$('adj').style.color=css('--ok');$('adjw').textContent='no adjustment needed';return}
   $('adj').textContent=(dmm>0?'+':'−')+a.toFixed(a<10?2:1)+' mm';
   $('adj').style.color=css(dmm>0?'--fast':'--slow');
   $('adjw').textContent=(dmm>0?'down, further from pivot':'up, closer to pivot')+' ('+(a/25.4).toFixed(a<25.4?3:2)+' in)';
 }
+async function calStart(){
+  if(!confirm('Calibrate: this notes the current period ('+D.per.toFixed(2)+' ms). Then move the bob a measured amount, wait about a minute, and press Finish.'))return;
+  const r=await fetch('/cal/start');if(!r.ok)alert(await r.text());tick()}
+async function calFinish(){
+  const v=prompt('How many mm did you move the bob?  + = down (away from pivot), - = up','');if(v===null)return;
+  const r=await fetch('/cal/finish?mm='+encodeURIComponent(v.trim()));if(!r.ok)alert(await r.text());tick()}
+async function calCancel(){await fetch('/cal/cancel');tick()}
 async function rz(){if(!confirm('Re-zero: set the pendulum clock equal to real time from the next beat?'))return;await fetch('/reset');tick()}
 tick();setInterval(tick,1000);setInterval(live,100);
 </script></body></html>

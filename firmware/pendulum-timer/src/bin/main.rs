@@ -166,6 +166,10 @@ async fn beam_task() {
 
 static SCAN: Mutex<RefCell<Vec<(String, i8)>>> = Mutex::new(RefCell::new(Vec::new()));
 static LAST_REQ_S: AtomicU32 = AtomicU32::new(0);
+/// Bob calibration, f32 bits: ms of period per mm (+ = bob down). NaN = none.
+static CAL_K: AtomicU32 = AtomicU32::new(0x7fc0_0000);
+/// Period (ms, f32 bits) noted when calibration started. 0 = not in progress.
+static CAL_P1: AtomicU32 = AtomicU32::new(0);
 
 #[allow(clippy::large_stack_frames)]
 #[esp_rtos::main]
@@ -195,6 +199,10 @@ async fn main(spawner: Spawner) -> ! {
 
     creds::init(FlashStorage::new(peripherals.FLASH));
     let saved = creds::load();
+    if let Some(k) = creds::load_cal() {
+        CAL_K.store(k.to_bits(), Ordering::Relaxed);
+        info!("Bob calibration: {k:.4} ms per mm");
+    }
 
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
@@ -478,7 +486,9 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
     let head = core::str::from_utf8(&req[..hdr_end]).unwrap_or("");
     let mut parts = head.split_ascii_whitespace();
     let method = String::from(parts.next().unwrap_or(""));
-    let path = String::from(parts.next().unwrap_or("/").split('?').next().unwrap_or("/"));
+    let target = parts.next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (path, query) = (String::from(path), String::from(query));
     let (method, path) = (method.as_str(), path.as_str());
     let clen: usize = head
         .lines()
@@ -505,7 +515,57 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
             let beam = beam_blocked_now();
             let known = BLOCKED_LEVEL.load(Ordering::Relaxed) != 0;
             critical_section::with(|cs| TIMING.borrow_ref(cs).json(now, beam, known, body));
+            // append calibration state: "k" ms per mm (null = not calibrated),
+            // "cal1" period noted at calibration start (null = not in progress)
+            if body.ends_with('}') {
+                body.pop();
+                let k = f32::from_bits(CAL_K.load(Ordering::Relaxed));
+                let c1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
+                if k.is_finite() { let _ = write!(body, ",\"k\":{k:.4}"); } else { body.push_str(",\"k\":null"); }
+                if c1 > 0.0 { let _ = write!(body, ",\"cal1\":{c1:.3}}}"); } else { body.push_str(",\"cal1\":null}"); }
+            }
             send(sock, "200 OK", "application/json", body.as_bytes()).await;
+        }
+        ("GET", "/cal/start") => {
+            let p = critical_section::with(|cs| TIMING.borrow_ref(cs).avg_period_ms()) as f32;
+            if p > 0.0 {
+                CAL_P1.store(p.to_bits(), Ordering::Relaxed);
+                info!("Calibration started at {p:.2} ms");
+                send(sock, "200 OK", "text/plain", b"ok").await;
+            } else {
+                send(sock, "400 Bad Request", "text/plain", b"No period measured yet - let it swing first.").await;
+            }
+        }
+        ("GET", "/cal/finish") => {
+            let p1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
+            let p2 = critical_section::with(|cs| TIMING.borrow_ref(cs).avg_period_ms()) as f32;
+            let mm: f32 = form_value(&query, "mm").trim().parse().unwrap_or(0.0);
+            let msg: &[u8] = if p1 <= 0.0 {
+                b"Press Calibrate first, before moving the bob."
+            } else if mm == 0.0 || !mm.is_finite() {
+                b"Enter how many mm you moved the bob (+ down, - up)."
+            } else if (p2 - p1).abs() < 0.3 {
+                b"The period hasn't changed measurably yet. Wait a minute after moving the bob, or move it further."
+            } else {
+                let k = (p2 - p1) / mm;
+                CAL_K.store(k.to_bits(), Ordering::Relaxed);
+                CAL_P1.store(0, Ordering::Relaxed);
+                creds::save_cal(Some(k));
+                info!("Calibrated: {p1:.2} -> {p2:.2} ms over {mm} mm = {k:.4} ms/mm");
+                b"ok"
+            };
+            let st = if msg == b"ok" { "200 OK" } else { "400 Bad Request" };
+            send(sock, st, "text/plain", msg).await;
+        }
+        ("GET", "/cal/cancel") => {
+            CAL_P1.store(0, Ordering::Relaxed);
+            send(sock, "200 OK", "text/plain", b"ok").await;
+        }
+        ("GET", "/cal/clear") => {
+            CAL_K.store(f32::NAN.to_bits(), Ordering::Relaxed);
+            CAL_P1.store(0, Ordering::Relaxed);
+            creds::save_cal(None);
+            send(sock, "200 OK", "text/plain", b"ok").await;
         }
         ("GET", "/reset") => {
             critical_section::with(|cs| TIMING.borrow_ref_mut(cs).reset());
