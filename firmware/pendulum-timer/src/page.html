@@ -33,6 +33,7 @@ a{color:var(--s1)}
 <div class="tile"><div class="k">Rate (last 30 periods)</div><div class="v" id="rate">-</div><div class="u" id="rateu">s/day</div></div>
 <div class="tile"><div class="k">Rate (since zero)</div><div class="v" id="lrate">-</div><div class="u">s/day</div></div>
 <div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms - target 1000</div></div>
+<div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">full swings/min - target 60</div></div>
 <div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u">ms (tick vs tock)</div></div>
 <div class="tile"><div class="k">Amplitude (approx)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
 <div class="tile"><div class="k">Beats</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
@@ -101,7 +102,9 @@ async function tick(){
     $('rate').textContent=D.np?sgn(D.rate):'-';
     $('rateu').textContent=D.np?'s/day ('+(D.rate>0?'fast':'slow')+' '+hms(D.rate)+'/day)':'s/day';
     $('lrate').textContent=D.real>10?sgn(D.lrate):'-';
-    $('per').textContent=fmt(D.per,2);$('be').textContent=fmt(D.be,1);
+    $('per').textContent=fmt(D.per,2);
+    const bpm=D.per>0?60000/D.per:NaN;$('bpm').textContent=D.np?fmt(bpm,2):'-';
+    $('bpm').style.color=D.np?css(Math.abs(bpm-60)<0.05?'--ok':bpm>60?'--fast':'--slow'):'';$('be').textContent=fmt(D.be,1);
     $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
     bob();
     $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
