@@ -8,6 +8,7 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:var(--ink2);font-size:13px}
 .hero{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:14px 16px;margin:14px 0;display:flex;flex-wrap:wrap;gap:12px 32px;align-items:center}
 .hero .big{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.05}
 .hero .lbl{font-size:13px;color:var(--ink2)}
+.hero .adj{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
 .clocks{display:grid;grid-template-columns:auto auto;gap:2px 14px;font-variant-numeric:tabular-nums}
 .clocks .t{font-size:22px;font-weight:600}.clocks .k{color:var(--ink2);font-size:13px;align-self:center}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
@@ -24,6 +25,7 @@ a{color:var(--s1)}
 <div class="hero">
  <div><div class="lbl">Clock vs real time</div><div class="big" id="err">-</div><div class="lbl" id="errw">-</div></div>
  <div class="clocks"><div class="k">Real</div><div class="t" id="treal">-</div><div class="k">Pendulum</div><div class="t" id="tclk">-</div></div>
+ <div title="Simple-pendulum estimate from the 30-period average: L = g&middot;T&sup2;/4&pi;&sup2;. On a real pendulum with a heavy rod, the bob may need to move a bit more than this."><div class="lbl">Move the bob</div><div class="adj" id="adj">-</div><div class="lbl" id="adjw">-</div></div>
  <div style="margin-left:auto"><button onclick="rz()">Re-zero</button></div>
 </div>
 <div class="tiles">
@@ -100,12 +102,24 @@ async function tick(){
     $('lrate').textContent=D.real>10?sgn(D.lrate):'-';
     $('per').textContent=fmt(D.per,2);$('be').textContent=fmt(D.be,1);
     $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
+    bob();
     $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
     const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
     $('status').textContent=!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
       :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
     render();live();
   }catch(e){$('status').textContent='connection lost, retrying...'}
+}
+// How far to move the bob so the period becomes exactly PERIOD (1 s).
+// Simple pendulum: L = g T^2 / (4 pi^2), so dL = g (T0^2 - T^2) / (4 pi^2).
+function bob(){
+  const G=9.80,T0=1.0;
+  if(!D.np||!(D.per>0)){$('adj').textContent='-';$('adjw').textContent='needs a few swings';return}
+  const T=D.per/1000,dmm=G*(T0*T0-T*T)/(4*Math.PI*Math.PI)*1000,a=Math.abs(dmm);
+  if(a<0.05){$('adj').textContent='on rate';$('adj').style.color=css('--ok');$('adjw').textContent='no adjustment needed';return}
+  $('adj').textContent=(dmm>0?'+':'−')+a.toFixed(a<10?2:1)+' mm';
+  $('adj').style.color=css(dmm>0?'--fast':'--slow');
+  $('adjw').textContent=(dmm>0?'down, further from pivot':'up, closer to pivot')+' ('+(a/25.4).toFixed(a<25.4?3:2)+' in)';
 }
 async function rz(){if(!confirm('Re-zero: set the pendulum clock equal to real time from the next beat?'))return;await fetch('/reset');tick()}
 tick();setInterval(tick,1000);setInterval(live,100);
