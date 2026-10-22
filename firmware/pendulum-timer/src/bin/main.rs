@@ -222,10 +222,22 @@ async fn main(spawner: Spawner) -> ! {
         );
         spawner.spawn(net_task(runner).unwrap());
 
-        let joined = matches!(
-            with_timeout(Duration::from_secs(20), controller.connect_async()).await,
-            Ok(Ok(_))
-        );
+        let mut joined = false;
+        for attempt in 1..=3 {
+            match with_timeout(Duration::from_secs(15), controller.connect_async()).await {
+                Ok(Ok(_)) => {
+                    joined = true;
+                    break;
+                }
+                Ok(Err(e)) => warn!("Join attempt {attempt}/3 failed: {e:?}"),
+                Err(_) => warn!("Join attempt {attempt}/3 timed out"),
+            }
+            let _ = controller.disconnect_async().await;
+            Timer::after(Duration::from_secs(2)).await;
+        }
+        if !joined {
+            report_scan(&mut controller, c.ssid.as_str()).await;
+        }
         if joined && with_timeout(Duration::from_secs(20), stack.wait_config_up()).await.is_ok() {
             let ip = stack.config_v4().map(|c| c.address.address()).unwrap_or(Ipv4Addr::UNSPECIFIED);
             info!("Stats page: http://{HOSTNAME}.local  or  http://{ip}");
@@ -293,6 +305,29 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
+/// After a failed join: say whether the network is visible and how it's set up.
+async fn report_scan(controller: &mut WifiController<'static>, want: &str) {
+    match controller.scan_async(&ScanConfig::default().with_max(30)).await {
+        Ok(list) => {
+            let mut found = false;
+            for ap in list.iter().filter(|ap| ap.ssid.as_str() == want) {
+                found = true;
+                warn!(
+                    "Saw \"{want}\": channel {}, signal {} dBm, security {:?}",
+                    ap.channel, ap.signal_strength, ap.auth_method
+                );
+            }
+            if !found {
+                warn!("\"{want}\" is not visible from here (ESP32 is 2.4 GHz only; check the name's spelling and case). Networks seen:");
+                for ap in list.iter() {
+                    warn!("  \"{}\" ch {} {} dBm {:?}", ap.ssid.as_str(), ap.channel, ap.signal_strength, ap.auth_method);
+                }
+            }
+        }
+        Err(e) => warn!("Scan failed: {e:?}"),
+    }
+}
+
 fn station_config(ssid: &str, pass: &str) -> StationConfig {
     let mut c = StationConfig::default();
     if let Ok(s) = ssid.try_into() {
@@ -301,7 +336,7 @@ fn station_config(ssid: &str, pass: &str) -> StationConfig {
     if pass.is_empty() {
         c.with_authentication(AuthenticationMethodConfig::Open)
     } else if let Ok(p) = pass.try_into() {
-        c.with_authentication(AuthenticationMethodConfig::Wpa2Personal(p))
+        c.with_authentication(AuthenticationMethodConfig::WpaWpa2Personal(p))
     } else {
         c
     }
