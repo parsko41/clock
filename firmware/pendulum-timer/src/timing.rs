@@ -86,6 +86,8 @@ pub struct Timing {
     mid1: Option<u64>,
     mid2: Option<u64>,
     t0: Option<u64>,
+    /// Mid-pass time of the last even-numbered beat (same side of the swing as t0).
+    t_even: u64,
     last_pass_us: u64,
     beats: u32,
     gaps: u32,
@@ -108,7 +110,7 @@ pub struct Timing {
     h_n: usize,
     h_head: usize,
     // whole-run error, decimated (halves its sample rate each time it fills)
-    he: [f32; HIST_N],
+    he: [f64; HIST_N], // f64: f32 would lose µs once the error passes ~8 s
     ht: [f32; HIST_N],
     e_n: usize,
     e_step: u32,
@@ -128,6 +130,7 @@ impl Timing {
             mid1: None,
             mid2: None,
             t0: None,
+            t_even: 0,
             last_pass_us: 0,
             beats: 0,
             gaps: 0,
@@ -189,7 +192,7 @@ impl Timing {
             self.e_n = HIST_N / 2;
             self.e_step *= 2;
         }
-        self.he[self.e_n] = err as f32;
+        self.he[self.e_n] = err;
         self.ht[self.e_n] = minutes as f32;
         self.e_n += 1;
     }
@@ -201,6 +204,7 @@ impl Timing {
         let Some(t0) = self.t0 else {
             // first pass after boot / re-zero is the reference: clock == real here
             self.t0 = Some(mid);
+            self.t_even = mid;
             self.mid1 = Some(mid);
             self.push_err(0.0, 0.0);
             return Pass { blocked_ms, ..Default::default() };
@@ -215,9 +219,15 @@ impl Timing {
             self.last_half_ms = half;
         }
         self.beats += 1;
-        let real_s = (mid - t0) as f64 / 1e6;
-        self.err_s = self.beats as f64 * BEAT_S - real_s;
-        self.push_err(real_s / 60.0, self.err_s);
+        // Clock vs real only on even beats: whole periods, so both ends of the
+        // comparison are on the same side of the swing. On odd beats the uneven
+        // tick/tock split (beat error or an off-centre beam) would add a sawtooth.
+        if self.beats % 2 == 0 {
+            self.t_even = mid;
+            let real_s = (mid - t0) as f64 / 1e6;
+            self.err_s = (self.beats / 2) as f64 * PERIOD_S - real_s;
+            self.push_err(real_s / 60.0, self.err_s);
+        }
 
         if let Some(m2) = self.mid2 {
             // Full period = tick + tock. Immune to the beam not being at dead centre.
@@ -282,7 +292,7 @@ impl Timing {
     pub fn live_err(&self, now_us: u64) -> f64 {
         match self.t0 {
             Some(t0) if self.stopped(now_us) => {
-                self.beats as f64 * BEAT_S - (now_us - t0) as f64 / 1e6
+                (self.beats / 2) as f64 * PERIOD_S - (now_us - t0) as f64 / 1e6
             }
             _ => self.err_s,
         }
@@ -292,9 +302,9 @@ impl Timing {
         let stopped = self.stopped(now_us);
         let real_s = self.t0.map(|t0| now_us.saturating_sub(t0) as f64 / 1e6).unwrap_or(0.0);
         let err = self.live_err(now_us);
-        let run_s = match (self.t0, self.mid1) {
+        let run_s = match self.t0 {
             _ if stopped => real_s,
-            (Some(t0), Some(m1)) if m1 > t0 => (m1 - t0) as f64 / 1e6,
+            Some(t0) if self.t_even > t0 => (self.t_even - t0) as f64 / 1e6,
             _ => 0.0,
         };
         let lrate = if run_s > 0.0 { err / run_s * 86400.0 } else { 0.0 };
@@ -307,8 +317,8 @@ impl Timing {
         out.clear();
         let _ = write!(
             out,
-            "{{\"n\":{},\"np\":{},\"err\":{:.3},\"real\":{:.2},\"rate\":{:.1},\"lrate\":{:.1},\
-             \"per\":{:.3},\"be\":{:.2},\"amp\":{:.3},\"ampmm\":{:.2},\"blk\":{:.2},\"gaps\":{},\
+            "{{\"n\":{},\"np\":{},\"err\":{:.6},\"real\":{:.6},\"rate\":{:.4},\"lrate\":{:.4},\
+             \"per\":{:.4},\"be\":{:.3},\"amp\":{:.3},\"ampmm\":{:.2},\"blk\":{:.2},\"gaps\":{},\
              \"stopped\":{},\"pol\":{},\"beam\":{},\"ago\":{},\"up\":{}",
             self.beats,
             self.h_n,
@@ -329,7 +339,7 @@ impl Timing {
             now_us / 1000
         );
         let start = (self.h_head + HIST_N - self.h_n) % HIST_N;
-        let list = |out: &mut String, name: &str, n: usize, f: &dyn Fn(usize) -> f32, prec: usize, extra: Option<f64>| {
+        let list = |out: &mut String, name: &str, n: usize, f: &dyn Fn(usize) -> f64, prec: usize, extra: Option<f64>| {
             let _ = write!(out, ",\"{name}\":[");
             for k in 0..n {
                 if k > 0 {
@@ -345,11 +355,11 @@ impl Timing {
             }
             out.push(']');
         };
-        list(out, "hp", self.h_n, &|k| self.hp[(start + k) % HIST_N], 2, None);
-        list(out, "ha", self.h_n, &|k| self.ha[(start + k) % HIST_N], 2, None);
+        list(out, "hp", self.h_n, &|k| self.hp[(start + k) % HIST_N] as f64, 3, None);
+        list(out, "ha", self.h_n, &|k| self.ha[(start + k) % HIST_N] as f64, 2, None);
         // when stopped, append a live point so the chart shows the clock falling behind
-        list(out, "ht", self.e_n, &|k| self.ht[k], 2, stopped.then_some(real_s / 60.0));
-        list(out, "he", self.e_n, &|k| self.he[k], 3, stopped.then_some(err));
+        list(out, "ht", self.e_n, &|k| self.ht[k] as f64, 2, stopped.then_some(real_s / 60.0));
+        list(out, "he", self.e_n, &|k| self.he[k], 6, stopped.then_some(err));
         out.push('}');
     }
 }

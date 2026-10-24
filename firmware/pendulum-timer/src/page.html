@@ -17,6 +17,7 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:var(--ink2);font-size:13px}
 .card{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:12px;margin-bottom:14px;position:relative}
 .card h2{font-size:14px;margin:0 0 6px;font-weight:600}canvas{width:100%;height:200px;display:block}
 .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:4px 7px;border-radius:4px;display:none;white-space:nowrap}
+.proj{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.proj th,.proj td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--grid)}.proj th:first-child,.proj td:first-child{text-align:left}.proj th{font-size:12px;color:var(--ink2);font-weight:500}.proj td{font-size:16px;font-weight:600}.proj td small{display:block;font-size:12px;font-weight:400;color:var(--ink2)}.proj tr:last-child td{border-bottom:0}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
 button{font:inherit;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--grid);background:var(--card);color:var(--ink);cursor:pointer}
 a{color:var(--s1)}
@@ -32,13 +33,16 @@ a{color:var(--s1)}
 <div class="tiles">
 <div class="tile"><div class="k">Rate (last 30 periods)</div><div class="v" id="rate">-</div><div class="u" id="rateu">s/day</div></div>
 <div class="tile"><div class="k">Rate (since zero)</div><div class="v" id="lrate">-</div><div class="u">s/day</div></div>
-<div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms - target 1000</div></div>
-<div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">full swings/min - target 60</div></div>
+<div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms (1 µs resolution) - target 1000</div></div>
+<div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">beats/min (tick + tock) - target 120</div></div>
 <div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u">ms (tick vs tock)</div></div>
 <div class="tile"><div class="k">Amplitude (approx)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
 <div class="tile"><div class="k">Beats</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
 </div>
-<div class="card"><h2>Clock vs real time (s) <span class="sub">- above 0 = ahead, whole run</span></h2><canvas id="c0"></canvas><div class="tip" id="t0"></div></div>
+<div class="card"><h2>Projected clock vs real time <span class="sub">- current error carried forward at a steady rate</span></h2>
+<div style="overflow-x:auto"><table class="proj"><thead><tr><th>After</th><th>At rate, last 30 periods<br><span id="pr30">-</span></th><th>At rate since zero<br><span id="prz">-</span></th></tr></thead><tbody id="projb"></tbody></table></div>
+<div class="sub" style="margin-top:6px">Timestamps have 1 µs resolution. Accuracy is set by the ESP32's crystal, typically ±10-20 ppm: about ±0.9-1.7 s/day, ±6-12 s/week.</div></div>
+<div class="card"><h2>Clock vs real time (s) <span class="sub">- above 0 = ahead, whole run, updated each full period</span></h2><canvas id="c0"></canvas><div class="tip" id="t0"></div></div>
 <div class="card"><h2>Period, tick + tock (ms) <span class="sub">- dashed line = 1000 ms</span></h2><canvas id="c1"></canvas><div class="tip" id="t1"></div></div>
 <div class="card"><h2>Amplitude (deg, approx)</h2><canvas id="c2"></canvas><div class="tip" id="t2"></div></div>
 <div class="sub">Raw data: <a href="/data">/data</a> &middot; <a href="/forget" onclick="return confirm('Forget saved Wi-Fi and reboot into setup mode?')">forget Wi-Fi</a></div>
@@ -49,6 +53,8 @@ function fmt(x,d){return (x===null||x===undefined||isNaN(x))?'-':x.toFixed(d)}
 function sgn(x,d){return isNaN(x)?'-':(x>0?'+':x<0?'−':'')+Math.abs(x).toFixed(d||0)}
 function hms(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
   return (h?h+'h ':'')+(h||m?m+'m ':'')+r.toFixed(h||m?0:1)+'s'}
+function hmsp(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
+  return h||m?(h?h+'h ':'')+m+'m '+r.toFixed(3)+'s':r.toFixed(6)+' s'}
 function clk(ms){const d=new Date(ms);return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
 function draw(cv,pts,ref,xl,col){
   const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
@@ -84,8 +90,8 @@ function render(){if(!D)return;
   draw($('c1'),series(D.hp),1000,['oldest','newest']);
   draw($('c2'),series(D.ha),null,['oldest','newest']);
 }
-hook($('c0'),$('t0'),p=>sw()+p[0].toFixed(1)+' min: <b>'+sgn(p[1],2)+'</b> s');
-hook($('c1'),$('t1'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(2)+'</b> ms');
+hook($('c0'),$('t0'),p=>sw()+p[0].toFixed(2)+' min: <b>'+sgn(p[1],6)+'</b> s');
+hook($('c1'),$('t1'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(3)+'</b> ms');
 hook($('c2'),$('t2'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(2)+'</b>&deg;');
 window.addEventListener('resize',render);
 function live(){ // tick the two clocks every 100 ms between fetches
@@ -97,22 +103,33 @@ function live(){ // tick the two clocks every 100 ms between fetches
 async function tick(){
   try{const r=await fetch('/data');D=await r.json();recv=Date.now();
     const e=D.err;
-    $('err').textContent=D.real>0?sgn(e,2)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
-    $('errw').textContent=D.real>0?(Math.abs(e)<0.005?'on time':(e>0?'ahead':'behind')+' by '+hms(e))+' after '+hms(D.real):'waiting for first beat';
-    $('rate').textContent=D.np?sgn(D.rate):'-';
+    $('err').textContent=D.real>0?sgn(e,6)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
+    $('errw').textContent=D.real>0?(e===0?'on time':(e>0?'ahead':'behind')+' by '+hmsp(e))+' after '+hms(D.real):'waiting for first beat';
+    $('rate').textContent=D.np?sgn(D.rate,3):'-';
     $('rateu').textContent=D.np?'s/day ('+(D.rate>0?'fast':'slow')+' '+hms(D.rate)+'/day)':'s/day';
-    $('lrate').textContent=D.real>10?sgn(D.lrate):'-';
-    $('per').textContent=fmt(D.per,2);
-    const bpm=D.per>0?60000/D.per:NaN;$('bpm').textContent=D.np?fmt(bpm,2):'-';
-    $('bpm').style.color=D.np?css(Math.abs(bpm-60)<0.05?'--ok':bpm>60?'--fast':'--slow'):'';$('be').textContent=fmt(D.be,1);
+    $('lrate').textContent=D.real>10?sgn(D.lrate,3):'-';
+    $('per').textContent=fmt(D.per,3);
+    const bpm=D.per>0?120000/D.per:NaN;$('bpm').textContent=D.np?fmt(bpm,3):'-';
+    $('bpm').style.color=D.np?css(Math.abs(bpm-120)<0.05?'--ok':bpm>120?'--fast':'--slow'):'';$('be').textContent=fmt(D.be,3);
     $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
-    bob();
+    bob();proj();
     $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
     const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
     $('status').textContent=!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
       :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
     render();live();
   }catch(e){$('status').textContent='connection lost, retrying...'}
+}
+// Projection: today's error plus a steady rate carried forward.
+// err(t) = err_now + rate * t / 86400, for each horizon t.
+function proj(){
+  const H=[['1 hour',3600],['1 day',86400],['1 week',604800]];
+  const r30=D.np?D.rate:NaN, rz=D.real>10?D.lrate:NaN;
+  $('pr30').textContent=isNaN(r30)?'-':sgn(r30,3)+' s/day';$('prz').textContent=isNaN(rz)?'-':sgn(rz,3)+' s/day';
+  const cell=(r,t)=>{if(isNaN(r))return '<td>-</td>';const v=D.err+r*t/86400;
+    return '<td style="color:'+css(v>0?'--fast':'--slow')+'">'+sgn(v,3)+' s<small>'+(v>0?'ahead ':'behind ')+hmsp(v)+'</small></td>'};
+  let h='';for(const [n,t] of H)h+='<tr><td>'+n+'</td>'+cell(r30,t)+cell(rz,t)+'</tr>';
+  $('projb').innerHTML=h;
 }
 // How far to move the bob so the period becomes 1000 ms.
 // Calibrated (D.k = ms of period per mm, + = bob down): mm = (1000 - per) / k.

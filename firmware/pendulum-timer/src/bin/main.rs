@@ -153,7 +153,7 @@ async fn beam_task() {
             let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs).edge(t, high == bh));
             if let Some(p) = pass {
                 info!(
-                    "{}  {:.2}  {:.2}  {:.1}  {:+.0}  {:+.2}  {:.2}",
+                    "{}  {:.3}  {:.3}  {:.3}  {:+.3}  {:+.6}  {:.2}",
                     p.beats, p.half_ms, p.period_ms, p.blocked_ms, p.rate_s_per_day, p.err_s, p.amp_deg
                 );
             }

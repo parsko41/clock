@@ -8,8 +8,10 @@ ESP32 firmware written in Rust, with no Arduino and no ESP-IDF. It uses `esp-hal
 
 The live page at `http://pendulum.local` shows:
 
-- **Clock vs real time**: how far the clock is ahead or behind, in seconds. It's calculated as `beats × 0.5 s − real elapsed`, counted from the first beat after boot or after **Re-zero**. It also shows real time and pendulum time side by side.
-- **Rate** in s/day, from full periods (tick + tock). A beam that isn't exactly at dead centre doesn't bias it.
+- **Clock vs real time**: how far the clock is ahead or behind, in seconds. It's calculated as `periods × 1 s − real elapsed`, counted from the first beat after boot or after **Re-zero**. It also shows real time and pendulum time side by side.
+- **Rate** in s/day, from full periods (tick + tock). A beam that isn't exactly at dead centre doesn't bias it. Clock vs real time is also updated only on whole periods (every second beat), so an uneven tick/tock split doesn't add a sawtooth.
+- **Projected clock vs real time** after 1 hour, 1 day and 1 week: the current error carried forward at the last-30-periods rate and at the since-zero rate.
+- Everything at the timer's full resolution: timestamps are whole microseconds, so error is shown to 1 µs and period to 0.001 ms. Accuracy is still set by the ESP32's crystal (typically ±10–20 ppm, about 1–2 s/day).
 - **Period** against the 1000 ms target, **beat error** (tick/tock asymmetry) and **swing amplitude**. Amplitude is estimated from how long the flag blocks the beam: `A = w / (2·sin(π·t_blocked / T))`.
 
 Each pass is timestamped at the **middle** of its blocked pulse. That way, a change in amplitude (which changes the pulse width) doesn't shift the timing. Real time comes from the ESP32's crystal, which is typically within 1–2 s/day.
@@ -28,6 +30,15 @@ Flag width and pivot-to-flag distance are constants at the top of `firmware/pend
 | `firmware/pendulum-timer/src/mdns.rs` | Tiny `pendulum.local` responder |
 | `firmware/host-tests/` | Runs the timing and mDNS tests on a PC against a simulated pendulum |
 | `archive/arduino-pendulum-timer/` | The original Arduino sketch (v1), kept for reference |
+
+### Flash a prebuilt app.bin (Windows)
+
+```
+pip install esptool pyserial
+python firmware\flash.py
+```
+
+It picks the newest `app.bin` (current folder, next to the script, or Downloads), finds the board's CP210x port, writes the app at 0x10000 (keeping Wi-Fi and calibration) and opens the serial log. Options: a path to a specific image, `--port COM3`, `--wifi wifi.txt`, `--no-monitor`.
 
 ### Build and flash (Windows)
 

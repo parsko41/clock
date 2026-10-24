@@ -131,6 +131,78 @@ mod tests {
         assert_eq!(field(&s, "ago"), -1.0);
     }
 
+    /// Fast edge generator for long runs: exact crossing times of a sine swing,
+    /// no sampling. Two passes per period, each a (blocked, clear) pair.
+    fn edges_fast(period_s: f64, amp_mm: f64, offset_mm: f64, periods: u64) -> impl Iterator<Item = (u64, bool)> {
+        let w = 2.0 * std::f64::consts::PI / period_s;
+        let a1 = ((offset_mm - FLAG_WIDTH_MM / 2.0) / amp_mm).asin();
+        let a2 = ((offset_mm + FLAG_WIDTH_MM / 2.0) / amp_mm).asin();
+        (0..periods).flat_map(move |k| {
+            let base = 1.0 + k as f64 * period_s;
+            let us = |t: f64| (t * 1e6).round() as u64;
+            // rising side: x goes a1 -> a2; falling side: a2 -> a1
+            [
+                (us(base + a1 / w), true),
+                (us(base + a2 / w), false),
+                (us(base + (std::f64::consts::PI - a2) / w), true),
+                (us(base + (std::f64::consts::PI - a1) / w), false),
+            ]
+        })
+    }
+
+    #[test]
+    fn offset_beam_has_no_sawtooth() {
+        // Perfect 1.000 s pendulum, beam 4.27 mm off centre: ~80 ms "beat error",
+        // but clock vs real must stay at zero on every update.
+        let mut tm = Timing::new();
+        let mut worst: f64 = 0.0;
+        for (t, b) in edges_fast(1.0, 17.4, 4.27, 200) {
+            if let Some(p) = tm.edge(t, b) {
+                worst = worst.max(p.err_s.abs());
+            }
+        }
+        let mut s = String::new();
+        tm.json(1_000_000 + 200_000_000, false, true, &mut s);
+        assert!(field(&s, "be") > 70.0, "be {}", field(&s, "be"));
+        assert!(worst < 2e-6, "worst err {worst}");
+        assert!(field(&s, "lrate").abs() < 0.01, "lrate {}", field(&s, "lrate"));
+    }
+
+    #[test]
+    fn microsecond_resolution() {
+        // 1 µs slow per period -> after 1000 periods, 1.000 ms behind.
+        let mut tm = Timing::new();
+        for (t, b) in edges_fast(1.000_001, 17.4, 0.0, 1001) {
+            tm.edge(t, b);
+        }
+        let mut s = String::new();
+        tm.json(1_000_000 + 1_001_000_000, false, true, &mut s);
+        let err = field(&s, "err");
+        assert!((err + 0.001).abs() < 2e-6, "err {err}");
+        assert!((field(&s, "per") - 1000.001).abs() < 0.0006, "per {}", field(&s, "per"));
+    }
+
+    #[test]
+    fn week_run_keeps_precision_and_fits() {
+        // Screenshot rate (1002.52 ms) for 7 days: expect -217.18 s/day * 7.
+        let p = 1.00252;
+        let n = (7.0 * 86400.0 / p) as u64;
+        let mut tm = Timing::new();
+        for (t, b) in edges_fast(p, 17.4, 4.27, n) {
+            tm.edge(t, b);
+        }
+        let end = 1_000_000 + ((n as f64 - 1.0) * p * 1e6) as u64 + 300_000;
+        let mut s = String::new();
+        tm.json(end, false, true, &mut s);
+        let real = field(&s, "real");
+        let expect = -(p - 1.0) / p * real; // err = (1/p - 1) * real
+        let err = field(&s, "err");
+        assert!((err - expect).abs() < 0.002, "err {err} expect {expect}");
+        assert!((field(&s, "lrate") + 217.18).abs() < 0.01, "lrate {}", field(&s, "lrate"));
+        assert!(s.len() < 16_000, "json {} bytes", s.len());
+        println!("week: err {err} lrate {} json {} bytes", field(&s, "lrate"), s.len());
+    }
+
     #[test]
     fn long_run_history_decimates() {
         let tm = run(1.000, 15.0, 0.0, 1200.0); // 2400 beats -> decimated to <=300 points
