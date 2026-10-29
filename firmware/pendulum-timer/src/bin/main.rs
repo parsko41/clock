@@ -4,10 +4,11 @@
 //! - First boot (no Wi-Fi saved): open hotspot "Pendulum-Setup". Join it, open
 //!   http://192.168.4.1, pick your network, type the password. It reboots onto it.
 //! - After that: http://pendulum.local (or the IP printed on the serial log).
-//!   /data JSON (?s=2 for sensor 2), /reset re-zero, /log.csv run log,
-//!   /log/clear start a new log, /forget erase Wi-Fi.
-//! - The two sensors are timed independently, each exactly like the single
-//!   sensor was. The run log holds every pass from both.
+//!   /data JSON, /reset re-zero, /log.csv run log, /log/clear start a new log,
+//!   /forget erase Wi-Fi.
+//! - The two beams sit near the two ends of the swing. Their passes are combined
+//!   into turn times (see `swing.rs`): period, half swings, amplitude each side,
+//!   beam positions, and per-tooth timing. The run log holds every raw pass.
 //! - Flag in or out of the beam at boot doesn't matter: which sensor level means
 //!   "blocked" is learned from the first few swings.
 
@@ -54,7 +55,8 @@ use log::{info, warn};
 use pendulum_timer::{
     creds, mdns,
     runlog::{CSV_HEADER, CsvState, Full, LOG_N, RunLog},
-    timing::{GLITCH_US, Polarity, Timing},
+    swing::Swing,
+    timing::{GLITCH_US, Polarity},
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -102,7 +104,9 @@ static BEAM: Mutex<RefCell<Beam>> = Mutex::new(RefCell::new(Beam {
     head: 0,
     tail: 0,
 }));
-static TIMING: Mutex<RefCell<[Timing; 2]>> = Mutex::new(RefCell::new([Timing::new(), Timing::new()]));
+static SWING: Mutex<RefCell<Swing>> = Mutex::new(RefCell::new(Swing::new()));
+/// Passes seen per sensor since boot.
+static PASSES: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 static LOG: Mutex<RefCell<RunLog>> = Mutex::new(RefCell::new(RunLog::new()));
 /// Per sensor: 0 = not known yet, 1 = blocked reads LOW, 2 = blocked reads HIGH
 static BLOCKED_LEVEL: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
@@ -145,6 +149,7 @@ fn beam_blocked_now(s: usize) -> bool {
 #[embassy_executor::task]
 async fn beam_task() {
     let mut pol = [Polarity::new(), Polarity::new()];
+    let mut block_t: [Option<u64>; 2] = [None, None];
     let mut log_full_told = false;
     info!("Waiting for a few swings to learn which sensor level means 'blocked'...");
     loop {
@@ -168,22 +173,35 @@ async fn beam_task() {
             if !known {
                 BLOCKED_LEVEL[s].store(if bh { 2 } else { 1 }, Ordering::Relaxed);
                 info!("Sensor {} (GPIO{}): beam blocked = {}", s + 1, PINS[s], if bh { "HIGH" } else { "LOW" });
-                info!("sensor  beat  half_ms  period_ms  blocked_ms  rate_s/day  err_s  amp_deg");
+                info!("turn: side  t_s  amp_mm  beam_offset_mm");
             }
-            let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs)[s].edge(t, high == bh));
-            if let Some(p) = pass {
-                let logged = critical_section::with(|cs| LOG.borrow_ref_mut(cs).push(s as u8 + 1, p.mid_us, p.width_us));
-                if !logged && !log_full_told {
-                    warn!("Run log full - download /log.csv, then /log/clear to start a new one");
-                }
-                log_full_told = !logged;
-                info!(
-                    "S{}  {}  {:.3}  {:.3}  {:.3}  {:+.3}  {:+.6}  {:.2}",
-                    s + 1, p.beats, p.half_ms, p.period_ms, p.blocked_ms, p.rate_s_per_day, p.err_s, p.amp_deg
-                );
+            if high == bh {
+                block_t[s] = Some(t);
+                continue;
             }
+            let Some(b) = block_t[s].take() else { continue };
+            let (width, mid) = (t - b, b + (t - b) / 2);
+            PASSES[s].fetch_add(1, Ordering::Relaxed);
+            let logged = critical_section::with(|cs| LOG.borrow_ref_mut(cs).push(s as u8 + 1, mid, width));
+            if !logged && !log_full_told {
+                warn!("Run log full - download /log.csv, then /log/clear to start a new one");
+            }
+            log_full_told = !logged;
+            let turn = critical_section::with(|cs| SWING.borrow_ref_mut(cs).pass(s, mid, width));
+            log_turn(turn);
         }
+        let turn = critical_section::with(|cs| SWING.borrow_ref_mut(cs).poll(now_us()));
+        log_turn(turn);
         Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
+fn log_turn(turn: Option<pendulum_timer::swing::Turn>) {
+    if let Some(tn) = turn {
+        match tn.amp_off {
+            Some((a, d)) => info!("turn S{}  {:.6}  {a:.2}  {d:.2}", tn.side + 1, tn.t_us as f64 / 1e6),
+            None => info!("turn S{}  {:.6}  (flag didn't clear the beam)", tn.side + 1, tn.t_us as f64 / 1e6),
+        }
     }
 }
 
@@ -542,58 +560,9 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
             send(sock, "200 OK", "text/html", body.as_bytes()).await;
         }
         ("GET", "/") | ("GET", "/stats") => send(sock, "200 OK", "text/html", PAGE.as_bytes()).await,
-        ("GET", "/data") => {
-            let s = if form_value(&query, "s").trim() == "2" { 1 } else { 0 };
-            let now = now_us();
-            let beam = beam_blocked_now(s);
-            let known = BLOCKED_LEVEL[s].load(Ordering::Relaxed) != 0;
-            critical_section::with(|cs| TIMING.borrow_ref(cs)[s].json(now, beam, known, body));
-            // which sensor this is, a one-line status of both, and the run log
-            if body.ends_with('}') {
-                body.pop();
-                let _ = write!(body, ",\"sensor\":{},\"sens\":[", s + 1);
-                for o in 0..2 {
-                    let (n, per, stopped) = critical_section::with(|cs| {
-                        let t = &TIMING.borrow_ref(cs)[o];
-                        (t.beats(), t.avg_period_ms(), t.stopped(now))
-                    });
-                    let pol = BLOCKED_LEVEL[o].load(Ordering::Relaxed) != 0;
-                    let _ = write!(
-                        body,
-                        "{}{{\"pin\":{},\"pol\":{pol},\"n\":{n},\"per\":{per:.3},\"stopped\":{stopped},\"beam\":{}}}",
-                        if o > 0 { "," } else { "" },
-                        PINS[o],
-                        beam_blocked_now(o)
-                    );
-                }
-                let (ln, lps, span, full) = critical_section::with(|cs| {
-                    let l = LOG.borrow_ref(cs);
-                    (l.len(), l.per_sensor(), l.span_s(), l.full())
-                });
-                let full = match full {
-                    Full::No => "null",
-                    Full::Buffer => "\"buffer\"",
-                    Full::Time => "\"time\"",
-                };
-                let _ = write!(
-                    body,
-                    "],\"log\":{{\"n\":{ln},\"cap\":{LOG_N},\"s1\":{},\"s2\":{},\"span\":{span:.1},\"full\":{full}}}}}",
-                    lps[0], lps[1]
-                );
-            }
-            // append calibration state: "k" ms per mm (null = not calibrated),
-            // "cal1" period noted at calibration start (null = not in progress)
-            if body.ends_with('}') {
-                body.pop();
-                let k = f32::from_bits(CAL_K.load(Ordering::Relaxed));
-                let c1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
-                if k.is_finite() { let _ = write!(body, ",\"k\":{k:.4}"); } else { body.push_str(",\"k\":null"); }
-                if c1 > 0.0 { let _ = write!(body, ",\"cal1\":{c1:.3}}}"); } else { body.push_str(",\"cal1\":null}"); }
-            }
-            send(sock, "200 OK", "application/json", body.as_bytes()).await;
-        }
+        ("GET", "/data") => send_data(sock, body).await,
         ("GET", "/cal/start") => {
-            let p = critical_section::with(|cs| TIMING.borrow_ref(cs)[0].avg_period_ms()) as f32;
+            let p = critical_section::with(|cs| SWING.borrow_ref(cs).avg_period_ms()) as f32;
             if p > 0.0 {
                 CAL_P1.store(p.to_bits(), Ordering::Relaxed);
                 info!("Calibration started at {p:.2} ms");
@@ -604,7 +573,7 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
         }
         ("GET", "/cal/finish") => {
             let p1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
-            let p2 = critical_section::with(|cs| TIMING.borrow_ref(cs)[0].avg_period_ms()) as f32;
+            let p2 = critical_section::with(|cs| SWING.borrow_ref(cs).avg_period_ms()) as f32;
             let mm: f32 = form_value(&query, "mm").trim().parse().unwrap_or(0.0);
             let msg: &[u8] = if p1 <= 0.0 {
                 b"Press Calibrate first, before moving the bob."
@@ -634,7 +603,7 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
             send(sock, "200 OK", "text/plain", b"ok").await;
         }
         ("GET", "/reset") => {
-            critical_section::with(|cs| TIMING.borrow_ref_mut(cs).iter_mut().for_each(|t| t.reset()));
+            critical_section::with(|cs| SWING.borrow_ref_mut(cs).reset());
             info!("Re-zeroed");
             send(sock, "200 OK", "text/plain", b"ok").await;
         }
@@ -688,6 +657,59 @@ async fn send(sock: &mut TcpSocket<'_>, status: &str, ctype: &str, body: &[u8]) 
     if sock.write_all(h.as_bytes()).await.is_ok() {
         let _ = sock.write_all(body).await;
     }
+}
+
+/// Dashboard JSON, streamed a part at a time (no big buffer, no long lock).
+async fn send_data(sock: &mut TcpSocket<'_>, body: &mut String) {
+    let _ = sock
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\
+              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    let now = now_us();
+    let mut part = 0;
+    loop {
+        let more = critical_section::with(|cs| SWING.borrow_ref(cs).json_part(part, now, body));
+        if !more || sock.write_all(body.as_bytes()).await.is_err() {
+            break;
+        }
+        part += 1;
+    }
+    // sensors, run log, calibration, and close the object
+    body.clear();
+    body.push_str(",\"sens\":[");
+    for o in 0..2 {
+        let pol = BLOCKED_LEVEL[o].load(Ordering::Relaxed) != 0;
+        let _ = write!(
+            body,
+            "{}{{\"pin\":{},\"pol\":{pol},\"n\":{},\"beam\":{}}}",
+            if o > 0 { "," } else { "" },
+            PINS[o],
+            PASSES[o].load(Ordering::Relaxed),
+            beam_blocked_now(o)
+        );
+    }
+    let (ln, lps, span, full) = critical_section::with(|cs| {
+        let l = LOG.borrow_ref(cs);
+        (l.len(), l.per_sensor(), l.span_s(), l.full())
+    });
+    let full = match full {
+        Full::No => "null",
+        Full::Buffer => "\"buffer\"",
+        Full::Time => "\"time\"",
+    };
+    let _ = write!(
+        body,
+        "],\"log\":{{\"n\":{ln},\"cap\":{LOG_N},\"s1\":{},\"s2\":{},\"span\":{span:.1},\"full\":{full}}}",
+        lps[0], lps[1]
+    );
+    // calibration: "k" ms per mm (null = not calibrated), "cal1" period noted at start
+    let k = f32::from_bits(CAL_K.load(Ordering::Relaxed));
+    let c1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
+    if k.is_finite() { let _ = write!(body, ",\"k\":{k:.4}"); } else { body.push_str(",\"k\":null"); }
+    if c1 > 0.0 { let _ = write!(body, ",\"cal1\":{c1:.3}}}"); } else { body.push_str(",\"cal1\":null}"); }
+    let _ = sock.write_all(body.as_bytes()).await;
 }
 
 /// Stream the run log as CSV, a chunk at a time so the log is never locked for long

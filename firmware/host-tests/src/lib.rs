@@ -7,6 +7,8 @@ pub mod timing;
 pub mod mdns;
 #[path = "../../pendulum-timer/src/runlog.rs"]
 pub mod runlog;
+#[path = "../../pendulum-timer/src/swing.rs"]
+pub mod swing;
 #[path = "../../pendulum-timer/src/wifitxt.rs"]
 pub mod wifitxt;
 
@@ -214,6 +216,200 @@ mod tests {
         let n = ht[..ht.find(']').unwrap()].split(',').count();
         assert!(n <= HIST_N && n >= HIST_N / 2, "{n} points");
         assert!(s.len() < 12_000, "json {} bytes", s.len());
+    }
+}
+
+#[cfg(test)]
+mod swing_tests {
+    use super::swing::*;
+    use super::timing::FLAG_WIDTH_MM;
+    use alloc::string::String;
+    use std::f64::consts::PI;
+
+    struct Sim {
+        amp: f64,
+        beams: [f64; 2],
+        period_s: f64,
+        /// half swing moving toward -x is this many ms longer than the other
+        asym_ms: f64,
+        bad_tooth: Option<(u64, f64)>,
+    }
+
+    /// Returns passes (sensor, mid_us, width_us) and true turn times.
+    fn simulate(sim: &Sim, secs: f64) -> (Vec<(usize, u64, u64)>, Vec<u64>) {
+        let dt = 5u64;
+        let mut theta = 0.3f64;
+        let mut t = 1_000_000u64;
+        let end = t + (secs * 1e6) as u64;
+        let mut blocked = [false; 2];
+        let mut start = [0u64; 2];
+        let mut out = vec![];
+        let mut turns = vec![];
+        let mut last_sign = 0.0f64;
+        while t < end {
+            let cycle = ((theta + PI / 2.0) / (2.0 * PI)).floor() as u64;
+            let mut per = sim.period_s;
+            if let Some((k, d)) = sim.bad_tooth {
+                if cycle % 30 == k {
+                    per -= d / 1000.0;
+                }
+            }
+            // escapement asymmetry: going toward -x, the swing is a little slower
+            // through the middle (|x| < 1/3 A, never at the turns, like an impulse)
+            let moving_neg = theta.cos() < 0.0;
+            let mid = theta.sin().abs() < 1.0 / 3.0;
+            // the middle band is 2 asin(1/3)/pi = 21.6% of a half swing
+            let k = if moving_neg && mid { 1.0 + sim.asym_ms / 1000.0 / (per / 2.0 * 0.21635) } else { 1.0 };
+            theta += 2.0 * PI * (dt as f64 / 1e6) / per / k;
+            let x = sim.amp * theta.sin();
+            let v = theta.cos();
+            if last_sign != 0.0 && v.signum() != last_sign {
+                turns.push(t);
+            }
+            last_sign = v.signum();
+            for s in 0..2 {
+                let b = (x - sim.beams[s]).abs() < FLAG_WIDTH_MM / 2.0;
+                if b && !blocked[s] {
+                    start[s] = t;
+                }
+                if !b && blocked[s] {
+                    out.push((s, (start[s] + t) / 2, t - start[s]));
+                }
+                blocked[s] = b;
+            }
+            t += dt;
+        }
+        (out, turns)
+    }
+
+    fn run(sim: &Sim, secs: f64) -> (Swing, u32) {
+        let (passes, _) = simulate(sim, secs);
+        let mut sw = Swing::new();
+        let mut turns = 0;
+        for (s, mid, w) in passes {
+            sw.poll(mid);
+            if sw.pass(s, mid, w).is_some() {
+                turns += 1;
+            }
+        }
+        (sw, turns)
+    }
+
+    fn json(sw: &Swing, now: u64) -> String {
+        let mut all = String::new();
+        let mut part = String::new();
+        let mut i = 0;
+        while sw.json_part(i, now, &mut part) {
+            all.push_str(&part);
+            i += 1;
+        }
+        all.push('}');
+        all
+    }
+
+    fn arr(json: &str, key: &str) -> Vec<f64> {
+        let k = format!("\"{key}\":[");
+        let i = json.find(&k).unwrap() + k.len();
+        json[i..i + json[i..].find(']').unwrap()]
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().unwrap_or(f64::NAN))
+            .collect()
+    }
+
+    /// `DUMP=out.json cargo test --release dump_dashboard_json -- --ignored`
+    /// writes realistic /data JSON for trying the page without hardware.
+    #[test]
+    #[ignore]
+    fn dump_dashboard_json() {
+        let sim = Sim { amp: 24.5, beams: [-14.6, 15.8], period_s: 1.0012, asym_ms: 3.5, bad_tooth: Some((11, 8.0)) };
+        let (sw, _) = run(&sim, 420.0);
+        let mut s = json(&sw, 1_000_000 + 420_000_000);
+        s.pop();
+        s.push_str(",\"sens\":[{\"pin\":22,\"pol\":true,\"n\":840,\"beam\":false},{\"pin\":23,\"pol\":true,\"n\":840,\"beam\":false}],\
+            \"log\":{\"n\":1680,\"cap\":6144,\"s1\":840,\"s2\":840,\"span\":419.6,\"full\":null},\"k\":null,\"cal1\":null}");
+        std::fs::write(std::env::var("DUMP").unwrap_or("dash.json".into()), s).unwrap();
+    }
+
+    #[test]
+    fn amp_and_offset_exact() {
+        // A = 25, d = 15, T = 1 s: out-and-back 292.08 ms, blocked 51.14 ms
+        let w = 2.0 * PI;
+        let tau1 = ((15.0 - FLAG_WIDTH_MM / 2.0) / 25.0f64).acos() / w;
+        let tau2 = ((15.0 + FLAG_WIDTH_MM / 2.0) / 25.0f64).acos() / w;
+        let (a, d) = amp_and_offset(tau1 + tau2, tau1 - tau2, 1.0).unwrap();
+        assert!((a - 25.0).abs() < 1e-9 && (d - 15.0).abs() < 1e-9, "{a} {d}");
+    }
+
+    #[test]
+    fn two_beams_find_period_halves_amplitude_beams_and_bad_tooth() {
+        let sim = Sim { amp: 25.0, beams: [-14.0, 16.0], period_s: 1.0015, asym_ms: 3.5, bad_tooth: Some((7, 8.0)) };
+        let (sw, turns) = run(&sim, 400.0);
+        let s = json(&sw, 1_000_000 + 400_000_000);
+        println!("{}", &s[..s.find("\"hp\"").unwrap()]);
+        assert!(turns > 780, "{turns} turns");
+        let amp = arr(&s, "amp");
+        let off = arr(&s, "off");
+        // within ~2%: the sim's asymmetry stretches the measured period but not
+        // the swing near the turns, which the amplitude maths assumes
+        assert!((amp[0] - 25.0).abs() < 0.6 && (amp[1] - 25.0).abs() < 0.6, "amp {amp:?}");
+        assert!((off[0] - 14.0).abs() < 0.6 && (off[1] - 16.0).abs() < 0.6, "off {off:?}");
+        // halves: sensor 1 is on the -x side, so the half ending there is the long one
+        let h = arr(&s, "h");
+        assert!((h[0] - h[1] - 3.5).abs() < 0.05, "halves {h:?}");
+        // per tooth: the short cycle (8 ms) lands on one or two neighbouring
+        // teeth (the sim's cycle starts at the other end of the swing from the
+        // measured period, so it's split 4 + 4); every other tooth is 1005 ms
+        let avg = arr(&s, "avg");
+        let dev: Vec<f64> = avg.iter().map(|v| v - 1005.0).collect();
+        let bad: Vec<usize> = (0..30).filter(|&i| dev[i].abs() > 0.05).collect();
+        println!("tooth deviations {:?}", dev.iter().map(|d| (d * 1000.0).round() / 1000.0).collect::<Vec<_>>());
+        assert!(!bad.is_empty() && bad.len() <= 2, "{bad:?}");
+        if bad.len() == 2 {
+            assert!(bad[1] - bad[0] == 1 || (bad[0] == 0 && bad[1] == 29));
+        }
+        let total: f64 = bad.iter().map(|&i| dev[i]).sum();
+        assert!((total + 8.0).abs() < 0.05, "{total}");
+        let _ = &sim;
+        // clock vs real is consistent with the mean period
+        let per = (30.0 * 1005.0 - 8.0) / 30.0;
+        let n = sw.periods() as f64;
+        let expect = n - n * per / 1000.0;
+        let err: f64 = s[s.find("\"err\":").unwrap() + 6..].split(',').next().unwrap().parse().unwrap();
+        assert!((err - expect).abs() < 0.02, "err {err} expect {expect}");
+    }
+
+    #[test]
+    fn small_swing_that_doesnt_clear_a_beam_still_times() {
+        // beam 2 at +16 mm, swing 18 mm: the flag never clears it (needs 19.2)
+        let sim = Sim { amp: 18.0, beams: [-14.0, 16.0], period_s: 1.0, asym_ms: 0.0, bad_tooth: None };
+        let (sw, _) = run(&sim, 120.0);
+        let s = json(&sw, 1_000_000 + 120_000_000);
+        let per: f64 = s[s.find("\"per\":").unwrap() + 6..].split(',').next().unwrap().parse().unwrap();
+        assert!((per - 1000.0).abs() < 0.05, "{per}");
+        let h = arr(&s, "h");
+        assert!((h[0] - 500.0).abs() < 1.0 && (h[1] - 500.0).abs() < 1.0, "{h:?}");
+        assert!(sw.periods() > 110);
+        let amp = arr(&s, "amp");
+        assert!((amp[0] - 18.0).abs() < 0.1 && amp[1] == 0.0, "{amp:?}");
+    }
+
+    #[test]
+    fn one_missed_turn_counts_a_gap_not_a_double_period() {
+        let sim = Sim { amp: 25.0, beams: [-15.0, 15.0], period_s: 1.0, asym_ms: 0.0, bad_tooth: None };
+        let (passes, _) = simulate(&sim, 60.0);
+        let mut sw = Swing::new();
+        for (i, (s, mid, w)) in passes.into_iter().enumerate() {
+            if (40..42).contains(&i) {
+                continue; // lose one out-and-back pair
+            }
+            sw.poll(mid);
+            sw.pass(s, mid, w);
+        }
+        let s = json(&sw, 1_000_000 + 60_000_000);
+        assert!(s.contains("\"gaps\":1"), "{}", &s[..200]);
+        let err: f64 = s[s.find("\"err\":").unwrap() + 6..].split(',').next().unwrap().parse().unwrap();
+        assert!(err.abs() < 0.01, "{err}");
     }
 }
 

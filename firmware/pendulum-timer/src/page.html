@@ -1,180 +1,219 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Pendulum Timer</title>
 <style>
-:root{--bg:#fcfcfb;--card:#ffffff;--ink:#0b0b0b;--ink2:#52514e;--grid:#e6e5e0;--s1:#2a78d6;--ref:#9a998f;--fast:#c2410c;--slow:#2a78d6;--ok:#0a8a0a}
-@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232322;--ink:#f0efec;--ink2:#c3c2b7;--grid:#383835;--s1:#3987e5;--ref:#7d7c74;--fast:#f08a4b;--slow:#5aa2f0;--ok:#3cc13c}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,sans-serif;padding:16px;max-width:1000px;margin:auto}
-h1{font-size:20px;margin:0 0 4px}.sub{color:var(--ink2);font-size:13px}
-.hero{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:14px 16px;margin:14px 0;display:flex;flex-wrap:wrap;gap:12px 32px;align-items:center}
-.hero .big{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.05}
-.hero .lbl{font-size:13px;color:var(--ink2)}
-.hero .adj{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
-.clocks{display:grid;grid-template-columns:auto auto;gap:2px 14px;font-variant-numeric:tabular-nums}
-.clocks .t{font-size:22px;font-weight:600}.clocks .k{color:var(--ink2);font-size:13px;align-self:center}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
-.tile{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:10px 12px}
-.tile .k{color:var(--ink2);font-size:12px}.tile .v{font-size:24px;font-variant-numeric:tabular-nums;font-weight:600}.tile .u{font-size:12px;color:var(--ink2)}
-.card{background:var(--card);border:1px solid var(--grid);border-radius:8px;padding:12px;margin-bottom:14px;position:relative}
-.card h2{font-size:14px;margin:0 0 6px;font-weight:600}canvas{width:100%;height:200px;display:block}
-.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:4px 7px;border-radius:4px;display:none;white-space:nowrap}
-.proj{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.proj th,.proj td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--grid)}.proj th:first-child,.proj td:first-child{text-align:left}.proj th{font-size:12px;color:var(--ink2);font-weight:500}.proj td{font-size:16px;font-weight:600}.proj td small{display:block;font-size:12px;font-weight:400;color:var(--ink2)}.proj tr:last-child td{border-bottom:0}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
-button{font:inherit;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--grid);background:var(--card);color:var(--ink);cursor:pointer}
+:root{--bg:#fcfcfb;--card:#fff;--ink:#0b0b0b;--ink2:#5c5b57;--grid:#e6e5e0;--s1:#2a78d6;--s2:#c2410c;--ref:#9a998f;--fast:#c2410c;--slow:#2a78d6;--ok:#0a8a0a;--hi:#d4a017}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232322;--ink:#f0efec;--ink2:#b5b4aa;--grid:#383835;--s1:#3987e5;--s2:#f08a4b;--ref:#7d7c74;--fast:#f08a4b;--slow:#5aa2f0;--ok:#3cc13c;--hi:#e8b82e}}
+*{box-sizing:border-box}
+body{margin:0 auto;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,sans-serif;padding:12px 16px;max-width:1800px}
+.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-bottom:8px}
+h1{font-size:18px;margin:0}.sub{color:var(--ink2);font-size:12px}
+.top .btns{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+button{font:inherit;font-size:12px;padding:4px 10px;border-radius:5px;border:1px solid var(--grid);background:var(--card);color:var(--ink);cursor:pointer}
+button.on{border-color:var(--s1);box-shadow:inset 0 0 0 1px var(--s1)}
+.card{background:var(--card);border:1px solid var(--grid);border-radius:7px;padding:8px 10px;position:relative;min-width:0}
+.hero{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px 28px;align-items:center;margin-bottom:8px}
+@media (max-width:900px){.hero{grid-template-columns:1fr}}
+.pw{overflow-x:auto;min-width:0}
+.big{font-size:36px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.05}
+.lbl{font-size:12px;color:var(--ink2)}
+.clocks{display:grid;grid-template-columns:auto auto;gap:0 10px;font-variant-numeric:tabular-nums}.clocks .t{font-size:18px;font-weight:600}.clocks .lbl{align-self:center}
+.proj{border-collapse:collapse;font-variant-numeric:tabular-nums;width:100%;max-width:520px}.proj th,.proj td{text-align:right;padding:2px 8px;border-bottom:1px solid var(--grid);white-space:nowrap}.proj th:first-child,.proj td:first-child{text-align:left}.proj th{font-size:11px;color:var(--ink2);font-weight:500}.proj td{font-weight:600}.proj tr:last-child td{border-bottom:0}
+.adj{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:6px;margin-bottom:8px}
+.tile{background:var(--card);border:1px solid var(--grid);border-radius:7px;padding:6px 9px;min-width:0}
+.tile .k{color:var(--ink2);font-size:11px}.tile .v{font-size:19px;font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tile .u{font-size:11px;color:var(--ink2)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:8px;margin-bottom:8px}
+.card h2{font-size:13px;margin:0 0 4px;font-weight:600;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.card h2 .sp{margin-left:auto;display:flex;gap:4px}
+canvas{width:100%;height:190px;display:block}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:3px 7px;border-radius:4px;display:none;white-space:nowrap;z-index:2}
+.key{display:inline-flex;gap:10px;font-size:11px;color:var(--ink2);font-weight:400}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.foot{display:flex;flex-wrap:wrap;gap:4px 18px;align-items:center}
+.bar{height:5px;background:var(--grid);border-radius:3px;overflow:hidden;width:160px;display:inline-block;vertical-align:middle}.bar div{height:100%;background:var(--s1)}
 a{color:var(--s1)}
-.sens{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.sens button{text-align:left;padding:7px 12px}.sens button.on{border-color:var(--s1);box-shadow:inset 0 0 0 1px var(--s1)}.sens small{display:block;color:var(--ink2);font-size:12px}
-.logrow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}.logrow .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
-.bar{height:6px;background:var(--grid);border-radius:3px;overflow:hidden;flex:1;min-width:120px}.bar div{height:100%;background:var(--s1)}
 </style></head><body>
-<h1>Pendulum Timer</h1><div class="sub" id="status">connecting...</div>
-<div class="sens" id="sens"></div>
-<div class="hero">
+<div class="top"><h1>Pendulum Timer</h1><span class="sub" id="status">connecting...</span>
+ <div class="btns"><button onclick="rz()">Re-zero</button><a href="/log.csv" download="pendulum-run.csv"><button>Download CSV</button></a><button onclick="logClear()">New log</button></div></div>
+
+<div class="card hero">
  <div><div class="lbl">Clock vs real time</div><div class="big" id="err">-</div><div class="lbl" id="errw">-</div></div>
- <div class="clocks"><div class="k">Real</div><div class="t" id="treal">-</div><div class="k">Pendulum</div><div class="t" id="tclk">-</div></div>
- <div style="max-width:300px"><div class="lbl">Move the bob <span id="adjm"></span></div><div class="adj" id="adj">-</div><div class="lbl" id="adjw">-</div>
-  <div class="lbl" id="calui"></div></div>
- <div style="margin-left:auto"><button onclick="rz()">Re-zero</button></div>
+ <div class="clocks"><div class="lbl">Real</div><div class="t" id="treal">-</div><div class="lbl">Pendulum</div><div class="t" id="tclk">-</div></div>
+ <div class="pw"><table class="proj"><thead><tr><th>Projected</th><th>at last-30 rate <span id="pr30"></span></th><th>at rate since zero <span id="prz"></span></th></tr></thead><tbody id="projb"></tbody></table></div>
+ <div><div class="lbl">Move the bob <span id="adjm"></span></div><div class="adj" id="adj">-</div><div class="lbl" id="adjw">-</div><div class="lbl" id="calui"></div></div>
 </div>
+
 <div class="tiles">
-<div class="tile"><div class="k">Rate (last 30 periods)</div><div class="v" id="rate">-</div><div class="u" id="rateu">s/day</div></div>
-<div class="tile"><div class="k">Rate (since zero)</div><div class="v" id="lrate">-</div><div class="u">s/day</div></div>
-<div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms (1 µs resolution) - target 1000</div></div>
-<div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">beats/min (tick + tock) - target 120</div></div>
-<div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u">ms (tick vs tock)</div></div>
-<div class="tile"><div class="k">Amplitude (approx, beam at centre)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
-<div class="tile"><div class="k">Beats</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
+<div class="tile"><div class="k">Rate, last 30 periods</div><div class="v" id="rate">-</div><div class="u" id="rateu">s/day</div></div>
+<div class="tile"><div class="k">Rate since zero</div><div class="v" id="lrate">-</div><div class="u">s/day</div></div>
+<div class="tile"><div class="k">Period, avg 30</div><div class="v" id="per">-</div><div class="u" id="peru">ms - target 1000</div></div>
+<div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">tick + tock as one beat - target 60</div></div>
+<div class="tile"><div class="k">Half swings, avg 30</div><div class="v" id="half">-</div><div class="u">ms, ending at S1 / S2</div></div>
+<div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u" id="beu">ms (half of the difference)</div></div>
+<div class="tile"><div class="k">Amplitude, S1 side</div><div class="v" id="a1">-</div><div class="u" id="a1u">-</div></div>
+<div class="tile"><div class="k">Amplitude, S2 side</div><div class="v" id="a2">-</div><div class="u" id="a2u">-</div></div>
+<div class="tile"><div class="k">Beams from centre</div><div class="v" id="off">-</div><div class="u" id="offu">mm, S1 / S2 (at the flag)</div></div>
+<div class="tile"><div class="k">Periods</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
 </div>
-<div class="card"><h2>Run log <span class="sub">- every pass from both sensors, for a spreadsheet or Python</span></h2>
-<div class="logrow"><div><span class="v" id="logn">-</span> <span class="sub" id="logd"></span></div><div class="bar"><div id="logbar" style="width:0"></div></div>
-<a href="/log.csv" download="pendulum-run.csv"><button>Download CSV</button></a><button onclick="logClear()">New log</button></div>
-<div class="sub" style="margin-top:6px">Columns: sensor, pass, t_s (mid-pulse, from the first logged pass), blocked_ms, since_prev_ms (tick/tock), period_ms (full period). The log keeps the start of the run: it stops when full and isn't cleared by Re-zero.</div></div>
-<div class="card"><h2>Projected clock vs real time <span class="sub">- current error carried forward at a steady rate</span></h2>
-<div style="overflow-x:auto"><table class="proj"><thead><tr><th>After</th><th>At rate, last 30 periods<br><span id="pr30">-</span></th><th>At rate since zero<br><span id="prz">-</span></th></tr></thead><tbody id="projb"></tbody></table></div>
-<div class="sub" style="margin-top:6px">Timestamps have 1 µs resolution. Accuracy is set by the ESP32's crystal, typically ±10-20 ppm: about ±0.9-1.7 s/day, ±6-12 s/week.</div></div>
-<div class="card"><h2>Clock vs real time (s) <span class="sub">- above 0 = ahead, whole run, updated each full period</span></h2><canvas id="c0"></canvas><div class="tip" id="t0"></div></div>
-<div class="card"><h2>Period, tick + tock (ms) <span class="sub">- dashed line = 1000 ms</span></h2><canvas id="c1"></canvas><div class="tip" id="t1"></div></div>
-<div class="card"><h2>Amplitude (deg, approx)</h2><canvas id="c2"></canvas><div class="tip" id="t2"></div></div>
-<div class="sub">Raw data: <a href="/data">/data</a> &middot; <a href="/forget" onclick="return confirm('Forget saved Wi-Fi and reboot into setup mode?')">forget Wi-Fi</a></div>
+
+<div class="charts">
+<div class="card"><h2>Clock vs real time (s)<span class="sub">above 0 = ahead, whole run</span></h2><canvas id="c0"></canvas><div class="tip" id="t0"></div></div>
+<div class="card"><h2>Tooth timing<span class="sub" id="tsub">escape wheel, 30 teeth, 1 per period</span>
+ <span class="sp"><button id="m0" onclick="tm(0)">Period</button><button id="m1" onclick="tm(1)">Half swings</button><button id="m2" onclick="tm(2)">Amplitude</button></span></h2>
+ <canvas id="c3"></canvas><div class="tip" id="t3"></div><div class="sub" id="tnote">-</div></div>
+<div class="card"><h2>Period (ms)<span class="sub">turn to turn, S1 side - dashed = 1000</span></h2><canvas id="c1"></canvas><div class="tip" id="t1"></div></div>
+<div class="card"><h2>Half swings (ms)<span class="key"><span><span class="dot" style="background:var(--s1)"></span>ending at S1</span><span><span class="dot" style="background:var(--s2)"></span>ending at S2</span></span><span class="sub">dashed = 500</span></h2><canvas id="c2"></canvas><div class="tip" id="t2"></div></div>
+<div class="card"><h2>Amplitude at the flag (mm)<span class="key"><span><span class="dot" style="background:var(--s1)"></span>S1 side</span><span><span class="dot" style="background:var(--s2)"></span>S2 side</span></span></h2><canvas id="c4"></canvas><div class="tip" id="t4"></div></div>
+</div>
+
+<div class="card foot sub">
+ <span id="sens">-</span>
+ <span>Run log: <b id="logn">-</b> <span class="bar"><div id="logbar" style="width:0"></div></span> <span id="logd"></span></span>
+ <span>CSV: sensor, pass, t_s, blocked_ms, since_prev_ms, period_ms. Keeps the start of the run; stops when full; Re-zero doesn't clear it.</span>
+ <span><a href="/data">/data</a> &middot; <a href="/forget" onclick="return confirm('Forget saved Wi-Fi and reboot into setup mode?')">forget Wi-Fi</a></span>
+</div>
 <script>
-const $=id=>document.getElementById(id);let D=null,recv=0,S=location.hash=='#s2'?2:1;
-function pick(s){S=s;location.hash=s==2?'s2':'';D=null;tick()}
-async function logClear(){if(!confirm('Start a new run log? The current one is discarded - download it first.'))return;await fetch('/log/clear');tick()}
-function mmss(s){return Math.floor(s/60)+'m '+String(Math.floor(s%60)).padStart(2,'0')+'s'}
-function sensUi(){
-  $('sens').innerHTML=D.sens.map((x,i)=>'<button class="'+(i+1==S?'on':'')+'" onclick="pick('+(i+1)+')">Sensor '+(i+1)+' &middot; GPIO'+x.pin+
-    '<small>'+(!x.pol?(x.n?'learning...':'no passes yet'):(x.stopped?'stopped':'live')+' &middot; '+x.n+' passes'+(x.per>0?' &middot; '+x.per.toFixed(3)+' ms':'')+' &middot; beam '+(x.beam?'blocked':'clear'))+'</small></button>').join('');
-  const L=D.log;$('logn').textContent=L.n+' passes';
-  $('logd').textContent=mmss(L.span)+' · S1 '+L.s1+' · S2 '+L.s2+' · '+(100*L.n/L.cap).toFixed(0)+'% of '+L.cap+(L.full?(L.full=='time'?' · FULL (71 min limit)':' · FULL'):'');
-  $('logbar').style.width=(100*L.n/L.cap)+'%';$('logbar').style.background=css(L.full?'--fast':'--s1');
-}
+const $=id=>document.getElementById(id);let D=null,recv=0,TM=0;
+try{TM=+localStorage.getItem('tm')||0}catch(e){}
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
 function fmt(x,d){return (x===null||x===undefined||isNaN(x))?'-':x.toFixed(d)}
-function sgn(x,d){return isNaN(x)?'-':(x>0?'+':x<0?'−':'')+Math.abs(x).toFixed(d||0)}
-function hms(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
-  return (h?h+'h ':'')+(h||m?m+'m ':'')+r.toFixed(h||m?0:1)+'s'}
-function hmsp(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
-  return h||m?(h?h+'h ':'')+m+'m '+r.toFixed(3)+'s':r.toFixed(6)+' s'}
-function clk(ms){const d=new Date(ms);return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}
-function draw(cv,pts,ref,xl,col){
-  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
-  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);
-  const L=56,R=10,T=8,B=22,pw=W-L-R,ph=H-T-B;
-  if(pts.length<2){g.fillStyle=css('--ink2');g.font='13px system-ui';g.fillText('waiting for beats...',L,T+20);cv._pts=[];return}
-  const ys=pts.map(p=>p[1]);let lo=Math.min(...ys),hi=Math.max(...ys);if(ref!=null){lo=Math.min(lo,ref);hi=Math.max(hi,ref)}
-  let pad=(hi-lo)*0.1||Math.max(0.5,Math.abs(hi)*0.02);lo-=pad;hi+=pad;
-  const x0=pts[0][0],x1=pts[pts.length-1][0];
+function sgn(x,d){return (x===null||isNaN(x))?'-':(x>0?'+':x<0?'−':'')+Math.abs(x).toFixed(d||0)}
+function hms(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;return (h?h+'h ':'')+(h||m?m+'m ':'')+r.toFixed(h||m?0:1)+'s'}
+function hmsp(s){s=Math.abs(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;return h||m?(h?h+'h ':'')+m+'m '+r.toFixed(3)+'s':r.toFixed(6)+' s'}
+function mmss(s){return Math.floor(s/60)+'m '+String(Math.floor(s%60)).padStart(2,'0')+'s'}
+function clk(ms){return new Date(ms).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+const mean=a=>{const v=a.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((p,q)=>p+q,0)/v.length:NaN};
+
+// ---- line chart: S = [{pts:[[x,y]..], col}], ref = dashed level or null
+function frame(cv){const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
+  const g=cv.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,W,H);return {g,W,H,L:54,R:8,T:6,B:18}}
+function yaxis(f,lo,hi,Y){const {g,L,W,R}=f,dec=(hi-lo)<0.2?3:(hi-lo)<2?2:(hi-lo)<20?1:0;g.font='11px system-ui';g.textAlign='right';g.textBaseline='middle';
+  for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=Y(v);g.strokeStyle=css('--grid');g.lineWidth=1;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillStyle=css('--ink2');g.fillText(v.toFixed(dec),L-5,y)}}
+function range(vals,ref){let lo=Math.min(...vals),hi=Math.max(...vals);if(ref!=null){lo=Math.min(lo,ref);hi=Math.max(hi,ref)}
+  const pad=(hi-lo)*0.08||Math.max(0.05,Math.abs(hi)*0.002);return [lo-pad,hi+pad]}
+function draw(cv,S,ref,xl){
+  const f=frame(cv),{g,W,H,L,R,T,B}=f,pw=W-L-R,ph=H-T-B;S=S.filter(s=>s.pts.length);
+  if(!S.length||S[0].pts.length<2){g.fillStyle=css('--ink2');g.font='12px system-ui';g.fillText('waiting for swings...',L,T+18);cv._pts=[];return}
+  const ys=[].concat(...S.map(s=>s.pts.map(p=>p[1]))).filter(v=>!isNaN(v));const [lo,hi]=range(ys,ref);
+  const x0=Math.min(...S.map(s=>s.pts[0][0])),x1=Math.max(...S.map(s=>s.pts[s.pts.length-1][0]));
   const X=x=>L+(x1===x0?pw/2:(x-x0)*pw/(x1-x0)),Y=v=>T+ph-(v-lo)/(hi-lo)*ph;
-  const dec=(hi-lo)<2?2:(hi-lo)<20?1:0;
-  g.font='11px system-ui';g.textAlign='right';g.textBaseline='middle';
-  for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=Y(v);g.strokeStyle=css('--grid');g.lineWidth=1;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillStyle=css('--ink2');g.fillText(v.toFixed(dec),L-6,y)}
-  g.textAlign='left';g.textBaseline='alphabetic';g.fillText(xl[0],L,H-6);g.textAlign='right';g.fillText(xl[1],W-R,H-6);
+  yaxis(f,lo,hi,Y);g.fillStyle=css('--ink2');g.textBaseline='alphabetic';g.textAlign='left';g.fillText(xl[0],L,H-4);g.textAlign='right';g.fillText(xl[1],W-R,H-4);
   if(ref!=null){g.strokeStyle=css('--ref');g.setLineDash([4,4]);g.beginPath();g.moveTo(L,Y(ref));g.lineTo(W-R,Y(ref));g.stroke();g.setLineDash([])}
-  g.strokeStyle=col||css('--s1');g.lineWidth=2;g.lineJoin='round';g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1])));g.stroke();
-  cv._pts=pts.map(p=>({x:X(p[0]),y:Y(p[1]),p}));
+  for(const s of S){g.strokeStyle=s.col;g.lineWidth=1.6;g.lineJoin='round';g.beginPath();let up=false;
+    s.pts.forEach(p=>{if(isNaN(p[1])){up=false;return}up?g.lineTo(X(p[0]),Y(p[1])):g.moveTo(X(p[0]),Y(p[1]));up=true});g.stroke()}
+  cv._pts=S[0].pts.map((p,i)=>({x:X(p[0]),ys:S.map(s=>s.pts[i]?Y(s.pts[i][1]):NaN),i}));cv._S=S;
   if(cv._hover!=null&&cv._pts[cv._hover]){const q=cv._pts[cv._hover];g.strokeStyle=css('--ink2');g.lineWidth=1;g.beginPath();g.moveTo(q.x,T);g.lineTo(q.x,T+ph);g.stroke();
-    g.fillStyle=css('--card');g.beginPath();g.arc(q.x,q.y,6,0,7);g.fill();g.fillStyle=col||css('--s1');g.beginPath();g.arc(q.x,q.y,4,0,7);g.fill()}
+    S.forEach((s,k)=>{if(isNaN(q.ys[k]))return;g.fillStyle=css('--card');g.beginPath();g.arc(q.x,q.ys[k],5,0,7);g.fill();g.fillStyle=s.col;g.beginPath();g.arc(q.x,q.ys[k],3.5,0,7);g.fill()})}
 }
 function hook(cv,tip,label){
   cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect(),x=e.clientX-r.left;if(!cv._pts||!cv._pts.length)return;
     let best=0;cv._pts.forEach((q,i)=>{if(Math.abs(q.x-x)<Math.abs(cv._pts[best].x-x))best=i});cv._hover=best;const q=cv._pts[best];
-    tip.innerHTML=label(q.p,best,cv._pts.length);tip.style.display='block';
-    tip.style.left=Math.max(4,Math.min(q.x+16,r.width-tip.offsetWidth-4))+'px';tip.style.top=(q.y+10)+'px';render()});
+    tip.innerHTML=label(best,cv._pts.length);tip.style.display='block';
+    tip.style.left=Math.max(4,Math.min(q.x+14,r.width-tip.offsetWidth-4))+'px';tip.style.top=(Math.min(...q.ys.filter(v=>!isNaN(v)))+28)+'px';render()});
   cv.addEventListener('mouseleave',()=>{cv._hover=null;tip.style.display='none';render()});
 }
-const sw=()=>'<span class="dot" style="background:'+css('--s1')+'"></span>';
-function series(a){return a.map((v,i)=>[i,v])}
+const sw=c=>'<span class="dot" style="background:'+c+'"></span>';
+
+// ---- tooth chart: bars per tooth (1 or 2 series of deviations), dots = last rev
+function teeth(){
+  const T=D.tooth,mode=TM;let S,unit,dec;
+  const dev=a=>{const m=mean(a);return a.map(v=>v===null?NaN:v-m)};
+  if(mode==0){S=[{v:dev(T.avg),col:css('--s1'),name:'period'}];const m=mean(T.avg);S[0].last=T.last.map(v=>v===null?NaN:v-m);unit='ms';dec=3}
+  else if(mode==1){S=[{v:dev(T.h1),col:css('--s1'),name:'half ending S1'},{v:dev(T.h2),col:css('--s2'),name:'half ending S2'}];unit='ms';dec=3}
+  else{S=[{v:dev(T.a1),col:css('--s1'),name:'S1 side'},{v:dev(T.a2),col:css('--s2'),name:'S2 side'}];unit='mm';dec=3}
+  return {S,unit,dec}
+}
+function drawTeeth(){
+  const cv=$('c3'),f=frame(cv),{g,W,H,L,R,T,B}=f,pw=W-L-R,ph=H-T-B;
+  if(!D||!D.tooth||!D.tooth.n.some(n=>n>0)){g.fillStyle=css('--ink2');g.font='12px system-ui';g.fillText('needs a few periods...',L,T+18);cv._pts=[];return}
+  const {S,unit}=teeth(),all=[0].concat(...S.map(s=>s.v.concat(s.last||[]))).filter(v=>!isNaN(v));
+  let [lo,hi]=range(all,0);const Y=v=>T+ph-(v-lo)/(hi-lo)*ph;yaxis(f,lo,hi,Y);
+  const cw=pw/30,bw=Math.max(2,cw*0.78/S.length),cur=D.tooth.cur;
+  g.fillStyle=css('--hi');g.globalAlpha=0.18;g.fillRect(L+cur*cw,T,cw,ph);g.globalAlpha=1;
+  g.strokeStyle=css('--ink2');g.lineWidth=1;g.beginPath();g.moveTo(L,Y(0));g.lineTo(W-R,Y(0));g.stroke();
+  S.forEach((s,k)=>{g.fillStyle=s.col;s.v.forEach((v,i)=>{if(isNaN(v))return;const x=L+i*cw+cw*0.11+k*bw,y0=Y(0),y=Y(v);g.fillRect(x,Math.min(y,y0),bw-1,Math.max(1,Math.abs(y-y0)))});
+    if(s.last){g.fillStyle=css('--ink');s.last.forEach((v,i)=>{if(isNaN(v))return;g.beginPath();g.arc(L+i*cw+cw/2,Y(v),2.2,0,7);g.fill()})}});
+  g.fillStyle=css('--ink2');g.font='10px system-ui';g.textAlign='center';g.textBaseline='alphabetic';
+  for(let i=0;i<30;i++)if(i%5==0||i==29||i==cur)g.fillText(i+1,L+i*cw+cw/2,H-4);
+  cv._pts=Array.from({length:30},(_,i)=>({x:L+i*cw+cw/2,ys:[T+ph/2],i}));
+  if(cv._hover!=null){g.strokeStyle=css('--ink2');g.strokeRect(L+cv._hover*cw+0.5,T+0.5,cw-1,ph-1)}
+}
+function toothNote(){
+  if(!D||!D.tooth)return;const T=D.tooth,{S,unit,dec}=teeth(),v=S[0].v;
+  let w=-1;v.forEach((x,i)=>{if(!isNaN(x)&&(w<0||Math.abs(x)>Math.abs(v[w])))w=i});
+  const revs=Math.min(...T.n),per=D.per>0?D.per/1000:1;
+  let s='Tooth numbers count from re-zero (tooth '+(T.cur+1)+' is in progress, highlighted). Bars = average over '+revs+'+ revs, deviation from the mean'+(TM==0?'; dots = last rev':'')+'.';
+  if(w>=0&&revs>0){const k=(w-T.cur+30)%30;s+=' Biggest: <b>tooth '+(w+1)+'</b> '+sgn(v[w],dec)+' '+unit+(k==0?' - <b>on it now</b>':' - next in '+(k*per).toFixed(0)+' s')+'.'}
+  $('tnote').innerHTML=s;
+}
+function tm(m){TM=m;try{localStorage.setItem('tm',m)}catch(e){}for(let i=0;i<3;i++)$('m'+i).className=i==m?'on':'';render();toothNote()}
+
 function render(){if(!D)return;
-  const run=D.real/60;
-  draw($('c0'),D.ht.map((t,i)=>[t,D.he[i]]),0,['zero',run<1?(D.real.toFixed(0)+' s'):(run.toFixed(run<10?1:0)+' min')],css(D.err>=0?'--fast':'--slow'));
-  draw($('c1'),series(D.hp),1000,['oldest','newest']);
-  draw($('c2'),series(D.ha),null,['oldest','newest']);
+  const run=D.real/60,idx=a=>a.map((v,i)=>[i,v]),s1=css('--s1'),s2=css('--s2');
+  draw($('c0'),[{pts:D.ht.map((t,i)=>[t,D.he[i]]),col:css(D.err>=0?'--fast':'--slow')}],0,['zero',run<1?(D.real.toFixed(0)+' s'):(run.toFixed(run<10?1:0)+' min')]);
+  draw($('c1'),[{pts:idx(D.hp),col:s1}],1000,['oldest','newest']);
+  const z=a=>a.map(v=>v>0?v:NaN);
+  draw($('c2'),[{pts:idx(z(D.hh1)),col:s1},{pts:idx(z(D.hh2)),col:s2}],500,['oldest','newest']);
+  draw($('c4'),[{pts:idx(z(D.ha1)),col:s1},{pts:idx(z(D.ha2)),col:s2}],null,['oldest','newest']);
+  drawTeeth();
 }
-hook($('c0'),$('t0'),p=>sw()+p[0].toFixed(2)+' min: <b>'+sgn(p[1],6)+'</b> s');
-hook($('c1'),$('t1'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(3)+'</b> ms');
-hook($('c2'),$('t2'),(p,i,n)=>sw()+'period '+(D.np-(n-1-i))+': <b>'+p[1].toFixed(2)+'</b>&deg;');
+const nth=(i,n)=>D.np-(n-1-i);
+hook($('c0'),$('t0'),i=>sw($('c0')._S[0].col)+D.ht[i].toFixed(2)+' min: <b>'+sgn(D.he[i],6)+'</b> s');
+hook($('c1'),$('t1'),(i,n)=>sw(css('--s1'))+'period '+nth(i,n)+': <b>'+D.hp[i].toFixed(3)+'</b> ms');
+hook($('c2'),$('t2'),(i,n)=>'period '+nth(i,n)+': '+sw(css('--s1'))+'<b>'+fmt(D.hh1[i],2)+'</b> '+sw(css('--s2'))+'<b>'+fmt(D.hh2[i],2)+'</b> ms');
+hook($('c4'),$('t4'),(i,n)=>'period '+nth(i,n)+': '+sw(css('--s1'))+'<b>'+fmt(D.ha1[i],2)+'</b> '+sw(css('--s2'))+'<b>'+fmt(D.ha2[i],2)+'</b> mm');
+hook($('c3'),$('t3'),i=>{const T=D.tooth,{S,unit,dec}=teeth();let h='tooth '+(i+1)+' ('+T.n[i]+' revs)';
+  S.forEach(s=>{h+='<br>'+sw(s.col)+s.name+' '+sgn(s.v[i],dec)+' '+unit});if(TM==0&&T.avg[i]!==null)h+='<br>avg '+T.avg[i].toFixed(3)+' ms, last '+fmt(T.last[i],3)+' ms';return h});
 window.addEventListener('resize',render);
-function live(){ // tick the two clocks every 100 ms between fetches
-  if(!D)return;const now=Date.now(),started=D.n>0||D.real>0;
-  $('treal').textContent=clk(now);
-  let e=D.err; if(D.stopped) e-= (now-recv)/1000;   // pendulum stopped: clock falls further behind
-  $('tclk').textContent=started?clk(now+e*1000):'-';
-}
-async function tick(){
-  try{const r=await fetch('/data?s='+S);D=await r.json();recv=Date.now();sensUi();
-    const e=D.err;
-    $('err').textContent=D.real>0?sgn(e,6)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
-    $('errw').textContent=D.real>0?(e===0?'on time':(e>0?'ahead':'behind')+' by '+hmsp(e))+' after '+hms(D.real):'waiting for first beat';
-    $('rate').textContent=D.np?sgn(D.rate,3):'-';
-    $('rateu').textContent=D.np?'s/day ('+(D.rate>0?'fast':'slow')+' '+hms(D.rate)+'/day)':'s/day';
-    $('lrate').textContent=D.real>10?sgn(D.lrate,3):'-';
-    $('per').textContent=fmt(D.per,3);
-    const bpm=D.per>0?120000/D.per:NaN;$('bpm').textContent=D.np?fmt(bpm,3):'-';
-    $('bpm').style.color=D.np?css(Math.abs(bpm-120)<0.05?'--ok':bpm>120?'--fast':'--slow'):'';$('be').textContent=fmt(D.be,3);
-    $('amp').textContent=D.np?fmt(D.amp,2):'-';$('ampu').textContent=D.np?'deg each side ('+fmt(D.ampmm,1)+' mm at flag)':'deg each side';
-    bob();proj();
-    $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
-    const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
-    $('status').textContent='Sensor '+S+': '+(!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
-      :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear'));
-    render();live();
-  }catch(e){$('status').textContent='connection lost, retrying...'}
-}
-// Projection: today's error plus a steady rate carried forward.
-// err(t) = err_now + rate * t / 86400, for each horizon t.
+
+function live(){if(!D)return;const now=Date.now();$('treal').textContent=clk(now);
+  let e=D.err;if(D.stopped)e-=(now-recv)/1000;$('tclk').textContent=D.real>0?clk(now+e*1000):'-'}
 function proj(){
-  const H=[['1 hour',3600],['1 day',86400],['1 week',604800]];
-  const r30=D.np?D.rate:NaN, rz=D.real>10?D.lrate:NaN;
-  $('pr30').textContent=isNaN(r30)?'-':sgn(r30,3)+' s/day';$('prz').textContent=isNaN(rz)?'-':sgn(rz,3)+' s/day';
-  const cell=(r,t)=>{if(isNaN(r))return '<td>-</td>';const v=D.err+r*t/86400;
-    return '<td style="color:'+css(v>0?'--fast':'--slow')+'">'+sgn(v,3)+' s<small>'+(v>0?'ahead ':'behind ')+hmsp(v)+'</small></td>'};
-  let h='';for(const [n,t] of H)h+='<tr><td>'+n+'</td>'+cell(r30,t)+cell(rz,t)+'</tr>';
-  $('projb').innerHTML=h;
+  const H=[['1 hour',3600],['1 day',86400],['1 week',604800]],r30=D.np?D.rate:NaN,rz=D.real>10?D.lrate:NaN;
+  $('pr30').textContent=isNaN(r30)?'':'('+sgn(r30,2)+' s/d)';$('prz').textContent=isNaN(rz)?'':'('+sgn(rz,2)+' s/d)';
+  const cell=(r,t)=>{if(isNaN(r))return '<td>-</td>';const v=D.err+r*t/86400;return '<td style="color:'+css(v>0?'--fast':'--slow')+'">'+sgn(v,3)+' s</td>'};
+  $('projb').innerHTML=H.map(([n,t])=>'<tr><td>'+n+'</td>'+cell(r30,t)+cell(rz,t)+'</tr>').join('');
 }
-// How far to move the bob so the period becomes 1000 ms.
-// Calibrated (D.k = ms of period per mm, + = bob down): mm = (1000 - per) / k.
-// Otherwise a simple-pendulum estimate: dL = g (T0^2 - T^2) / (4 pi^2),
-// which overstates the move when there's mass above the pivot.
 function bob(){
-  const cal=D.k!==null&&D.k!==undefined&&D.k!==0;
-  $('adjm').textContent=cal?'(calibrated)':'(rough estimate)';
+  const cal=D.k!==null&&D.k!==undefined&&D.k!==0;$('adjm').textContent=cal?'(calibrated)':'(rough estimate)';
   if(D.cal1)$('calui').innerHTML='Calibrating from '+D.cal1.toFixed(2)+' ms: move the bob a measured amount, wait ~1 min, then <a href="#" onclick="calFinish();return false">Finish</a> &middot; <a href="#" onclick="calCancel();return false">cancel</a>';
   else $('calui').innerHTML='<a href="#" onclick="calStart();return false">'+(cal?'Recalibrate':'Calibrate')+'</a>'+(cal?' &middot; '+D.k.toFixed(3)+' ms/mm':'');
   if(!D.np||!(D.per>0)){$('adj').textContent='-';$('adj').style.color='';$('adjw').textContent='needs a few swings';return}
-  let dmm;
-  if(cal)dmm=(1000-D.per)/D.k;
-  else{const G=9.80,T0=1.0,T=D.per/1000;dmm=G*(T0*T0-T*T)/(4*Math.PI*Math.PI)*1000}
-  const a=Math.abs(dmm);
+  const dmm=cal?(1000-D.per)/D.k:9.80*(1-Math.pow(D.per/1000,2))/(4*Math.PI*Math.PI)*1000,a=Math.abs(dmm);
   if(a<0.05){$('adj').textContent='on rate';$('adj').style.color=css('--ok');$('adjw').textContent='no adjustment needed';return}
-  $('adj').textContent=(dmm>0?'+':'−')+a.toFixed(a<10?2:1)+' mm';
-  $('adj').style.color=css(dmm>0?'--fast':'--slow');
+  $('adj').textContent=(dmm>0?'+':'−')+a.toFixed(a<10?2:1)+' mm';$('adj').style.color=css(dmm>0?'--fast':'--slow');
   $('adjw').textContent=(dmm>0?'down, further from pivot':'up, closer to pivot')+' ('+(a/25.4).toFixed(a<25.4?3:2)+' in)';
 }
-async function calStart(){
-  if(!confirm('Calibrate: this notes the current period ('+D.per.toFixed(2)+' ms). Then move the bob a measured amount, wait about a minute, and press Finish.'))return;
+async function tick(){
+  try{const r=await fetch('/data');D=await r.json();recv=Date.now();
+    const e=D.err,ok=D.real>0;
+    $('err').textContent=ok?sgn(e,6)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
+    $('errw').textContent=ok?(e===0?'on time':(e>0?'ahead':'behind')+' by '+hmsp(e))+' after '+hms(D.real):'waiting for the first turn';
+    $('rate').textContent=D.np?sgn(D.rate,3):'-';$('rateu').textContent=D.np?'s/day ('+(D.rate>0?'fast':'slow')+' '+hms(D.rate)+'/day)':'s/day';
+    $('lrate').textContent=D.real>10?sgn(D.lrate,3):'-';
+    $('per').textContent=fmt(D.per,3);$('peru').textContent='ms, last '+fmt(D.lper,3)+' - target 1000';
+    const bpm=D.per>0?60000/D.per:NaN;$('bpm').textContent=D.np?fmt(bpm,5):'-';$('bpm').style.color=D.np?css(Math.abs(bpm-60)<0.0005?'--ok':bpm>60?'--fast':'--slow'):'';
+    const hv=D.h[0]>0&&D.h[1]>0;$('half').textContent=hv?D.h[0].toFixed(2)+' / '+D.h[1].toFixed(2):'-';
+    $('be').textContent=hv?fmt(Math.abs(D.h[0]-D.h[1])/2,3):'-';$('beu').textContent=hv?'ms - '+(D.h[0]>D.h[1]?'swing to S1 is':'swing to S2 is')+' '+Math.abs(D.h[0]-D.h[1]).toFixed(2)+' ms longer':'ms';
+    for(const k of [0,1]){const id='a'+(k+1);$(id).textContent=D.amp[k]>0?D.amp[k].toFixed(2)+' mm':'-';$(id+'u').textContent=D.amp[k]>0?D.deg[k].toFixed(3)+'° from centre':'flag not clearing the beam?'}
+    $('off').textContent=D.off[0]>0||D.off[1]>0?fmt(D.off[0],1)+' / '+fmt(D.off[1],1):'-';
+    $('offu').textContent=D.off[0]>0&&D.off[1]>0?'mm, S1 / S2 - '+(D.off[0]+D.off[1]).toFixed(1)+' apart':'mm, S1 / S2 (at the flag)';
+    $('n').textContent=D.n;$('nu').textContent=(D.gaps?D.gaps+' missed':'none missed')+' - ref side S'+D.ref;
+    bob();proj();
+    const ago=D.ago<0?'no turns yet':'last turn '+(D.ago/1000).toFixed(1)+' s ago';
+    $('status').textContent=(D.real>0?(D.stopped?'STOPPED':'Live'):'Waiting for the pendulum')+' - '+ago+' - uptime '+Math.floor(D.up/60000)+' min';
+    $('sens').innerHTML=D.sens.map((x,i)=>sw(css(i?'--s2':'--s1'))+'S'+(i+1)+' GPIO'+x.pin+': '+(x.pol?x.n+' passes, beam '+(x.beam?'<b>blocked</b>':'clear'):(x.n?'learning':'no passes yet'))).join(' &nbsp; ');
+    const L=D.log;$('logn').textContent=L.n+' passes';$('logbar').style.width=(100*L.n/L.cap)+'%';$('logbar').style.background=css(L.full?'--fast':'--s1');
+    $('logd').textContent=mmss(L.span)+', S1 '+L.s1+' / S2 '+L.s2+', '+(100*L.n/L.cap).toFixed(0)+'% of '+L.cap+(L.full?(L.full=='time'?' - FULL (71 min limit)':' - FULL'):'');
+    render();live();toothNote();
+  }catch(e){$('status').textContent='connection lost, retrying...'}
+}
+async function calStart(){if(!confirm('Calibrate: this notes the current period ('+D.per.toFixed(2)+' ms). Then move the bob a measured amount, wait about a minute, and press Finish.'))return;
   const r=await fetch('/cal/start');if(!r.ok)alert(await r.text());tick()}
-async function calFinish(){
-  const v=prompt('How many mm did you move the bob?  + = down (away from pivot), - = up','');if(v===null)return;
+async function calFinish(){const v=prompt('How many mm did you move the bob?  + = down (away from pivot), - = up','');if(v===null)return;
   const r=await fetch('/cal/finish?mm='+encodeURIComponent(v.trim()));if(!r.ok)alert(await r.text());tick()}
 async function calCancel(){await fetch('/cal/cancel');tick()}
-async function rz(){if(!confirm('Re-zero both sensors: set the pendulum clock equal to real time from the next beat? (The run log is kept.)'))return;await fetch('/reset');tick()}
-tick();setInterval(tick,1000);setInterval(live,100);
+async function rz(){if(!confirm('Re-zero: clock = real time from the next turn. Restarts the averages and the tooth chart; the run log is kept.'))return;await fetch('/reset');tick()}
+async function logClear(){if(!confirm('Start a new run log? The current one is discarded - download it first.'))return;await fetch('/log/clear');tick()}
+tm(TM);tick();setInterval(tick,1000);setInterval(live,100);
 </script></body></html>

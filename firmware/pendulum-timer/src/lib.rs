@@ -7,5 +7,6 @@ extern crate alloc;
 pub mod creds;
 pub mod mdns;
 pub mod runlog;
+pub mod swing;
 pub mod timing;
 pub mod wifitxt;
