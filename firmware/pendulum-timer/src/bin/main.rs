@@ -1,9 +1,13 @@
-//! Pendulum timer: ESP32 + IR beam on GPIO22, live stats page over Wi-Fi.
+//! Pendulum timer: ESP32 + two IR beams (sensor 1 on GPIO22, sensor 2 on
+//! GPIO23), live stats page over Wi-Fi, and a run log you can download as CSV.
 //!
 //! - First boot (no Wi-Fi saved): open hotspot "Pendulum-Setup". Join it, open
 //!   http://192.168.4.1, pick your network, type the password. It reboots onto it.
 //! - After that: http://pendulum.local (or the IP printed on the serial log).
-//!   /data JSON, /reset re-zero, /forget erase Wi-Fi.
+//!   /data JSON (?s=2 for sensor 2), /reset re-zero, /log.csv run log,
+//!   /log/clear start a new log, /forget erase Wi-Fi.
+//! - The two sensors are timed independently, each exactly like the single
+//!   sensor was. The run log holds every pass from both.
 //! - Flag in or out of the beam at boot doesn't matter: which sensor level means
 //!   "blocked" is learned from the first few swings.
 
@@ -47,7 +51,11 @@ use esp_radio::wifi::{
 };
 use esp_storage::FlashStorage;
 use log::{info, warn};
-use pendulum_timer::{creds, mdns, timing::{GLITCH_US, Polarity, Timing}};
+use pendulum_timer::{
+    creds, mdns,
+    runlog::{CSV_HEADER, CsvState, Full, LOG_N, RunLog},
+    timing::{GLITCH_US, Polarity, Timing},
+};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -73,26 +81,31 @@ fn now_us() -> u64 {
 // The interrupt only timestamps raw edges into a ring buffer; `beam_task` works out
 // which level means "blocked" from the swing itself, then does the maths.
 
+/// Sensor index 0 = sensor 1 (GPIO22), 1 = sensor 2 (GPIO23).
+const PINS: [u8; 2] = [22, 23];
+
 struct Beam {
-    input: Option<Input<'static>>,
-    last_t: u64,
-    last_level: bool,
-    buf: [(u64, bool); 64],
+    input: [Option<Input<'static>>; 2],
+    last_t: [u64; 2],
+    last_level: [bool; 2],
+    /// (time, sensor index, level after the edge)
+    buf: [(u64, u8, bool); 128],
     head: usize,
     tail: usize,
 }
 
 static BEAM: Mutex<RefCell<Beam>> = Mutex::new(RefCell::new(Beam {
-    input: None,
-    last_t: 0,
-    last_level: false,
-    buf: [(0, false); 64],
+    input: [None, None],
+    last_t: [0; 2],
+    last_level: [false; 2],
+    buf: [(0, 0, false); 128],
     head: 0,
     tail: 0,
 }));
-static TIMING: Mutex<RefCell<Timing>> = Mutex::new(RefCell::new(Timing::new()));
-/// 0 = not known yet, 1 = blocked reads LOW, 2 = blocked reads HIGH
-static BLOCKED_LEVEL: AtomicU8 = AtomicU8::new(0);
+static TIMING: Mutex<RefCell<[Timing; 2]>> = Mutex::new(RefCell::new([Timing::new(), Timing::new()]));
+static LOG: Mutex<RefCell<RunLog>> = Mutex::new(RefCell::new(RunLog::new()));
+/// Per sensor: 0 = not known yet, 1 = blocked reads LOW, 2 = blocked reads HIGH
+static BLOCKED_LEVEL: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
 
 #[handler]
 #[ram]
@@ -101,35 +114,38 @@ fn beam_isr() {
     critical_section::with(|cs| {
         let mut b = BEAM.borrow_ref_mut(cs);
         let b = &mut *b;
-        let Some(input) = b.input.as_mut() else { return };
-        if !input.is_interrupt_set() {
-            return;
+        for s in 0..2 {
+            let Some(input) = b.input[s].as_mut() else { continue };
+            if !input.is_interrupt_set() {
+                continue;
+            }
+            input.clear_interrupt();
+            let level = input.is_high();
+            if level == b.last_level[s] || t.wrapping_sub(b.last_t[s]) < GLITCH_US {
+                continue; // bounce
+            }
+            b.last_level[s] = level;
+            b.last_t[s] = t;
+            b.buf[b.head % 128] = (t, s as u8, level);
+            b.head = b.head.wrapping_add(1);
         }
-        input.clear_interrupt();
-        let level = input.is_high();
-        if level == b.last_level || t.wrapping_sub(b.last_t) < GLITCH_US {
-            return; // bounce
-        }
-        b.last_level = level;
-        b.last_t = t;
-        b.buf[b.head % 64] = (t, level);
-        b.head = b.head.wrapping_add(1);
     });
 }
 
-fn beam_blocked_now() -> bool {
-    let bh = match BLOCKED_LEVEL.load(Ordering::Relaxed) {
+fn beam_blocked_now(s: usize) -> bool {
+    let bh = match BLOCKED_LEVEL[s].load(Ordering::Relaxed) {
         0 => return false,
         l => l == 2,
     };
     critical_section::with(|cs| {
-        BEAM.borrow_ref_mut(cs).input.as_mut().map(|i| i.is_high() == bh).unwrap_or(false)
+        BEAM.borrow_ref_mut(cs).input[s].as_mut().map(|i| i.is_high() == bh).unwrap_or(false)
     })
 }
 
 #[embassy_executor::task]
 async fn beam_task() {
-    let mut pol = Polarity::new();
+    let mut pol = [Polarity::new(), Polarity::new()];
+    let mut log_full_told = false;
     info!("Waiting for a few swings to learn which sensor level means 'blocked'...");
     loop {
         loop {
@@ -138,23 +154,32 @@ async fn beam_task() {
                 if b.tail == b.head {
                     return None;
                 }
-                let e = b.buf[b.tail % 64];
+                if b.head.wrapping_sub(b.tail) > 128 {
+                    b.tail = b.head.wrapping_sub(128); // overrun: drop the oldest
+                }
+                let e = b.buf[b.tail % 128];
                 b.tail = b.tail.wrapping_add(1);
                 Some(e)
             });
-            let Some((t, high)) = edge else { break };
-            let known = BLOCKED_LEVEL.load(Ordering::Relaxed) != 0;
-            let Some(bh) = pol.edge(t, high) else { continue };
+            let Some((t, s, high)) = edge else { break };
+            let s = s as usize;
+            let known = BLOCKED_LEVEL[s].load(Ordering::Relaxed) != 0;
+            let Some(bh) = pol[s].edge(t, high) else { continue };
             if !known {
-                BLOCKED_LEVEL.store(if bh { 2 } else { 1 }, Ordering::Relaxed);
-                info!("Beam blocked = {}", if bh { "HIGH" } else { "LOW" });
-                info!("beat  half_ms  period_ms  blocked_ms  rate_s/day  err_s  amp_deg");
+                BLOCKED_LEVEL[s].store(if bh { 2 } else { 1 }, Ordering::Relaxed);
+                info!("Sensor {} (GPIO{}): beam blocked = {}", s + 1, PINS[s], if bh { "HIGH" } else { "LOW" });
+                info!("sensor  beat  half_ms  period_ms  blocked_ms  rate_s/day  err_s  amp_deg");
             }
-            let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs).edge(t, high == bh));
+            let pass = critical_section::with(|cs| TIMING.borrow_ref_mut(cs)[s].edge(t, high == bh));
             if let Some(p) = pass {
+                let logged = critical_section::with(|cs| LOG.borrow_ref_mut(cs).push(s as u8 + 1, p.mid_us, p.width_us));
+                if !logged && !log_full_told {
+                    warn!("Run log full - download /log.csv, then /log/clear to start a new one");
+                }
+                log_full_told = !logged;
                 info!(
-                    "{}  {:.3}  {:.3}  {:.3}  {:+.3}  {:+.6}  {:.2}",
-                    p.beats, p.half_ms, p.period_ms, p.blocked_ms, p.rate_s_per_day, p.err_s, p.amp_deg
+                    "S{}  {}  {:.3}  {:.3}  {:.3}  {:+.3}  {:+.6}  {:.2}",
+                    s + 1, p.beats, p.half_ms, p.period_ms, p.blocked_ms, p.rate_s_per_day, p.err_s, p.amp_deg
                 );
             }
         }
@@ -183,18 +208,25 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
-    // Beam sensor on GPIO22 with pull-up. Flag in or out of the beam at boot is fine.
+    // Beam sensors on GPIO22 and GPIO23 with pull-ups. Flag in or out of a beam
+    // at boot is fine. A sensor that isn't plugged in just never reports.
     let mut io = Io::new(peripherals.IO_MUX);
     io.set_interrupt_handler(beam_isr);
-    let mut input = Input::new(peripherals.GPIO22, InputConfig::default().with_pull(Pull::Up));
-    let idle_high = input.is_high();
-    critical_section::with(|cs| {
-        input.listen(Event::AnyEdge);
-        let mut b = BEAM.borrow_ref_mut(cs);
-        b.last_level = idle_high;
-        b.input = Some(input);
-    });
-    info!("Pendulum timer ready. GPIO22 reads {} at boot", if idle_high { "HIGH" } else { "LOW" });
+    let inputs = [
+        Input::new(peripherals.GPIO22, InputConfig::default().with_pull(Pull::Up)),
+        Input::new(peripherals.GPIO23, InputConfig::default().with_pull(Pull::Up)),
+    ];
+    for (s, mut input) in inputs.into_iter().enumerate() {
+        let idle_high = input.is_high();
+        critical_section::with(|cs| {
+            input.listen(Event::AnyEdge);
+            let mut b = BEAM.borrow_ref_mut(cs);
+            b.last_level[s] = idle_high;
+            b.input[s] = Some(input);
+        });
+        info!("Sensor {} on GPIO{} reads {} at boot", s + 1, PINS[s], if idle_high { "HIGH" } else { "LOW" });
+    }
+    info!("Pendulum timer ready. Run log holds {LOG_N} passes.");
     spawner.spawn(beam_task().unwrap());
 
     creds::init(FlashStorage::new(peripherals.FLASH));
@@ -511,10 +543,44 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
         }
         ("GET", "/") | ("GET", "/stats") => send(sock, "200 OK", "text/html", PAGE.as_bytes()).await,
         ("GET", "/data") => {
+            let s = if form_value(&query, "s").trim() == "2" { 1 } else { 0 };
             let now = now_us();
-            let beam = beam_blocked_now();
-            let known = BLOCKED_LEVEL.load(Ordering::Relaxed) != 0;
-            critical_section::with(|cs| TIMING.borrow_ref(cs).json(now, beam, known, body));
+            let beam = beam_blocked_now(s);
+            let known = BLOCKED_LEVEL[s].load(Ordering::Relaxed) != 0;
+            critical_section::with(|cs| TIMING.borrow_ref(cs)[s].json(now, beam, known, body));
+            // which sensor this is, a one-line status of both, and the run log
+            if body.ends_with('}') {
+                body.pop();
+                let _ = write!(body, ",\"sensor\":{},\"sens\":[", s + 1);
+                for o in 0..2 {
+                    let (n, per, stopped) = critical_section::with(|cs| {
+                        let t = &TIMING.borrow_ref(cs)[o];
+                        (t.beats(), t.avg_period_ms(), t.stopped(now))
+                    });
+                    let pol = BLOCKED_LEVEL[o].load(Ordering::Relaxed) != 0;
+                    let _ = write!(
+                        body,
+                        "{}{{\"pin\":{},\"pol\":{pol},\"n\":{n},\"per\":{per:.3},\"stopped\":{stopped},\"beam\":{}}}",
+                        if o > 0 { "," } else { "" },
+                        PINS[o],
+                        beam_blocked_now(o)
+                    );
+                }
+                let (ln, lps, span, full) = critical_section::with(|cs| {
+                    let l = LOG.borrow_ref(cs);
+                    (l.len(), l.per_sensor(), l.span_s(), l.full())
+                });
+                let full = match full {
+                    Full::No => "null",
+                    Full::Buffer => "\"buffer\"",
+                    Full::Time => "\"time\"",
+                };
+                let _ = write!(
+                    body,
+                    "],\"log\":{{\"n\":{ln},\"cap\":{LOG_N},\"s1\":{},\"s2\":{},\"span\":{span:.1},\"full\":{full}}}}}",
+                    lps[0], lps[1]
+                );
+            }
             // append calibration state: "k" ms per mm (null = not calibrated),
             // "cal1" period noted at calibration start (null = not in progress)
             if body.ends_with('}') {
@@ -527,7 +593,7 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
             send(sock, "200 OK", "application/json", body.as_bytes()).await;
         }
         ("GET", "/cal/start") => {
-            let p = critical_section::with(|cs| TIMING.borrow_ref(cs).avg_period_ms()) as f32;
+            let p = critical_section::with(|cs| TIMING.borrow_ref(cs)[0].avg_period_ms()) as f32;
             if p > 0.0 {
                 CAL_P1.store(p.to_bits(), Ordering::Relaxed);
                 info!("Calibration started at {p:.2} ms");
@@ -538,7 +604,7 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
         }
         ("GET", "/cal/finish") => {
             let p1 = f32::from_bits(CAL_P1.load(Ordering::Relaxed));
-            let p2 = critical_section::with(|cs| TIMING.borrow_ref(cs).avg_period_ms()) as f32;
+            let p2 = critical_section::with(|cs| TIMING.borrow_ref(cs)[0].avg_period_ms()) as f32;
             let mm: f32 = form_value(&query, "mm").trim().parse().unwrap_or(0.0);
             let msg: &[u8] = if p1 <= 0.0 {
                 b"Press Calibrate first, before moving the bob."
@@ -568,8 +634,14 @@ async fn handle(sock: &mut TcpSocket<'_>, setup: bool, req: &mut [u8], body: &mu
             send(sock, "200 OK", "text/plain", b"ok").await;
         }
         ("GET", "/reset") => {
-            critical_section::with(|cs| TIMING.borrow_ref_mut(cs).reset());
+            critical_section::with(|cs| TIMING.borrow_ref_mut(cs).iter_mut().for_each(|t| t.reset()));
             info!("Re-zeroed");
+            send(sock, "200 OK", "text/plain", b"ok").await;
+        }
+        ("GET", "/log.csv") => send_log(sock, body).await,
+        ("GET", "/log/clear") => {
+            critical_section::with(|cs| LOG.borrow_ref_mut(cs).clear());
+            info!("Run log cleared");
             send(sock, "200 OK", "text/plain", b"ok").await;
         }
         ("POST", "/save") => {
@@ -615,6 +687,38 @@ async fn send(sock: &mut TcpSocket<'_>, status: &str, ctype: &str, body: &[u8]) 
     );
     if sock.write_all(h.as_bytes()).await.is_ok() {
         let _ = sock.write_all(body).await;
+    }
+}
+
+/// Stream the run log as CSV, a chunk at a time so the log is never locked for long
+/// and no big buffer is needed. No Content-Length: the end of the file is the
+/// connection closing.
+async fn send_log(sock: &mut TcpSocket<'_>, body: &mut String) {
+    let _ = sock
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/csv; charset=utf-8\r\n\
+              Content-Disposition: attachment; filename=\"pendulum-run.csv\"\r\n\
+              Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    if sock.write_all(CSV_HEADER.as_bytes()).await.is_err() {
+        return;
+    }
+    let mut st = CsvState::default();
+    let mut i = 0;
+    loop {
+        body.clear();
+        let (next, total) = critical_section::with(|cs| {
+            let l = LOG.borrow_ref(cs);
+            (l.csv_rows(i, i + 40, &mut st, body), l.len())
+        });
+        if body.is_empty() || sock.write_all(body.as_bytes()).await.is_err() {
+            break;
+        }
+        i = next;
+        if i >= total {
+            break;
+        }
     }
 }
 

@@ -5,6 +5,8 @@ extern crate alloc;
 pub mod timing;
 #[path = "../../pendulum-timer/src/mdns.rs"]
 pub mod mdns;
+#[path = "../../pendulum-timer/src/runlog.rs"]
+pub mod runlog;
 #[path = "../../pendulum-timer/src/wifitxt.rs"]
 pub mod wifitxt;
 
@@ -212,6 +214,95 @@ mod tests {
         let n = ht[..ht.find(']').unwrap()].split(',').count();
         assert!(n <= HIST_N && n >= HIST_N / 2, "{n} points");
         assert!(s.len() < 12_000, "json {} bytes", s.len());
+    }
+}
+
+#[cfg(test)]
+mod runlog_tests {
+    use super::runlog::*;
+    use super::timing::*;
+    use alloc::string::String;
+
+    /// Two beams 30 mm apart (±15 mm from centre), flag 6.35 mm, swing ±25 mm,
+    /// 1.000 s period, 10 minutes. Mirrors the planned end-of-stroke layout.
+    fn two_sensor_run(secs: f64) -> (RunLog, [u32; 2]) {
+        let (period, amp, d) = (1.0f64, 25.0f64, 15.0f64);
+        let mut tm = [Timing::new(), Timing::new()];
+        let mut log = RunLog::new();
+        let mut blocked = [false; 2];
+        let mut passes = [0u32; 2];
+        let mut t = 1_000_000u64;
+        let end = t + (secs * 1e6) as u64;
+        while t < end {
+            let ts = (t - 1_000_000) as f64 / 1e6;
+            let x = amp * (2.0 * std::f64::consts::PI * ts / period + 0.3).sin();
+            for (s, off) in [(0usize, -d), (1, d)] {
+                let b = (x - off).abs() < FLAG_WIDTH_MM / 2.0;
+                if b != blocked[s] {
+                    blocked[s] = b;
+                    if let Some(p) = tm[s].edge(t, b) {
+                        passes[s] += 1;
+                        log.push(s as u8 + 1, p.mid_us, p.width_us);
+                    }
+                }
+            }
+            t += 5;
+        }
+        (log, passes)
+    }
+
+    #[test]
+    fn ten_minute_two_sensor_run_fits_and_csv_is_right() {
+        let (log, passes) = two_sensor_run(600.0);
+        assert_eq!(log.full(), Full::No);
+        assert_eq!(log.len() as u32, passes[0] + passes[1]);
+        assert!(log.len() > 2350 && log.len() < LOG_N / 2, "{} passes", log.len());
+        let mut out = String::from(CSV_HEADER);
+        let mut st = CsvState::default();
+        let mut i = 0;
+        while i < log.len() {
+            i = log.csv_rows(i, i + 40, &mut st, &mut out);
+        }
+        let rows: Vec<&str> = out.lines().collect();
+        assert_eq!(rows.len(), log.len() + 1);
+        // every full period on either sensor is 1000 ms to within the 5 µs sim step
+        let mut n = 0;
+        for r in &rows[1..] {
+            let c: Vec<&str> = r.split(',').collect();
+            assert_eq!(c.len(), 6, "{r}");
+            if !c[5].is_empty() {
+                let p: f64 = c[5].parse().unwrap();
+                assert!((p - 1000.0).abs() < 0.02, "{r}");
+                n += 1;
+            }
+        }
+        assert!(n > 2300);
+        println!("{}\n{}\n{}\n{}", rows[0], rows[1], rows[2], rows[5]);
+    }
+
+    #[test]
+    fn stops_when_full_and_keeps_the_start() {
+        let mut log = RunLog::new();
+        for k in 0..LOG_N as u64 + 10 {
+            log.push(1, 5_000_000 + k * 500_000, 40_000);
+        }
+        assert_eq!(log.len(), LOG_N);
+        assert_eq!(log.full(), Full::Buffer);
+        let mut out = String::new();
+        log.csv_rows(0, 1, &mut CsvState::default(), &mut out);
+        assert_eq!(out, "1,1,0.000000,40.000,,\r\n");
+        log.clear();
+        assert!(log.is_empty() && log.full() == Full::No);
+    }
+
+    #[test]
+    fn stops_at_the_u32_clock_limit() {
+        let mut log = RunLog::new();
+        assert!(log.push(2, 1_000, 1));
+        assert!(log.push(2, 1_000 + u32::MAX as u64, 1));
+        assert!(!log.push(2, 2_000 + u32::MAX as u64, 1));
+        assert_eq!(log.full(), Full::Time);
+        assert_eq!(log.per_sensor(), [0, 2]);
     }
 }
 

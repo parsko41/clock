@@ -21,8 +21,12 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:var(--ink2);font-size:13px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
 button{font:inherit;font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--grid);background:var(--card);color:var(--ink);cursor:pointer}
 a{color:var(--s1)}
+.sens{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.sens button{text-align:left;padding:7px 12px}.sens button.on{border-color:var(--s1);box-shadow:inset 0 0 0 1px var(--s1)}.sens small{display:block;color:var(--ink2);font-size:12px}
+.logrow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}.logrow .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.bar{height:6px;background:var(--grid);border-radius:3px;overflow:hidden;flex:1;min-width:120px}.bar div{height:100%;background:var(--s1)}
 </style></head><body>
 <h1>Pendulum Timer</h1><div class="sub" id="status">connecting...</div>
+<div class="sens" id="sens"></div>
 <div class="hero">
  <div><div class="lbl">Clock vs real time</div><div class="big" id="err">-</div><div class="lbl" id="errw">-</div></div>
  <div class="clocks"><div class="k">Real</div><div class="t" id="treal">-</div><div class="k">Pendulum</div><div class="t" id="tclk">-</div></div>
@@ -36,9 +40,13 @@ a{color:var(--s1)}
 <div class="tile"><div class="k">Period (avg 30)</div><div class="v" id="per">-</div><div class="u">ms (1 µs resolution) - target 1000</div></div>
 <div class="tile"><div class="k">Beats per minute</div><div class="v" id="bpm">-</div><div class="u">beats/min (tick + tock) - target 120</div></div>
 <div class="tile"><div class="k">Beat error</div><div class="v" id="be">-</div><div class="u">ms (tick vs tock)</div></div>
-<div class="tile"><div class="k">Amplitude (approx)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
+<div class="tile"><div class="k">Amplitude (approx, beam at centre)</div><div class="v" id="amp">-</div><div class="u" id="ampu">deg each side</div></div>
 <div class="tile"><div class="k">Beats</div><div class="v" id="n">-</div><div class="u" id="nu">-</div></div>
 </div>
+<div class="card"><h2>Run log <span class="sub">- every pass from both sensors, for a spreadsheet or Python</span></h2>
+<div class="logrow"><div><span class="v" id="logn">-</span> <span class="sub" id="logd"></span></div><div class="bar"><div id="logbar" style="width:0"></div></div>
+<a href="/log.csv" download="pendulum-run.csv"><button>Download CSV</button></a><button onclick="logClear()">New log</button></div>
+<div class="sub" style="margin-top:6px">Columns: sensor, pass, t_s (mid-pulse, from the first logged pass), blocked_ms, since_prev_ms (tick/tock), period_ms (full period). The log keeps the start of the run: it stops when full and isn't cleared by Re-zero.</div></div>
 <div class="card"><h2>Projected clock vs real time <span class="sub">- current error carried forward at a steady rate</span></h2>
 <div style="overflow-x:auto"><table class="proj"><thead><tr><th>After</th><th>At rate, last 30 periods<br><span id="pr30">-</span></th><th>At rate since zero<br><span id="prz">-</span></th></tr></thead><tbody id="projb"></tbody></table></div>
 <div class="sub" style="margin-top:6px">Timestamps have 1 µs resolution. Accuracy is set by the ESP32's crystal, typically ±10-20 ppm: about ±0.9-1.7 s/day, ±6-12 s/week.</div></div>
@@ -47,7 +55,17 @@ a{color:var(--s1)}
 <div class="card"><h2>Amplitude (deg, approx)</h2><canvas id="c2"></canvas><div class="tip" id="t2"></div></div>
 <div class="sub">Raw data: <a href="/data">/data</a> &middot; <a href="/forget" onclick="return confirm('Forget saved Wi-Fi and reboot into setup mode?')">forget Wi-Fi</a></div>
 <script>
-const $=id=>document.getElementById(id);let D=null,recv=0;
+const $=id=>document.getElementById(id);let D=null,recv=0,S=location.hash=='#s2'?2:1;
+function pick(s){S=s;location.hash=s==2?'s2':'';D=null;tick()}
+async function logClear(){if(!confirm('Start a new run log? The current one is discarded - download it first.'))return;await fetch('/log/clear');tick()}
+function mmss(s){return Math.floor(s/60)+'m '+String(Math.floor(s%60)).padStart(2,'0')+'s'}
+function sensUi(){
+  $('sens').innerHTML=D.sens.map((x,i)=>'<button class="'+(i+1==S?'on':'')+'" onclick="pick('+(i+1)+')">Sensor '+(i+1)+' &middot; GPIO'+x.pin+
+    '<small>'+(!x.pol?(x.n?'learning...':'no passes yet'):(x.stopped?'stopped':'live')+' &middot; '+x.n+' passes'+(x.per>0?' &middot; '+x.per.toFixed(3)+' ms':'')+' &middot; beam '+(x.beam?'blocked':'clear'))+'</small></button>').join('');
+  const L=D.log;$('logn').textContent=L.n+' passes';
+  $('logd').textContent=mmss(L.span)+' · S1 '+L.s1+' · S2 '+L.s2+' · '+(100*L.n/L.cap).toFixed(0)+'% of '+L.cap+(L.full?(L.full=='time'?' · FULL (71 min limit)':' · FULL'):'');
+  $('logbar').style.width=(100*L.n/L.cap)+'%';$('logbar').style.background=css(L.full?'--fast':'--s1');
+}
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
 function fmt(x,d){return (x===null||x===undefined||isNaN(x))?'-':x.toFixed(d)}
 function sgn(x,d){return isNaN(x)?'-':(x>0?'+':x<0?'−':'')+Math.abs(x).toFixed(d||0)}
@@ -101,7 +119,7 @@ function live(){ // tick the two clocks every 100 ms between fetches
   $('tclk').textContent=started?clk(now+e*1000):'-';
 }
 async function tick(){
-  try{const r=await fetch('/data');D=await r.json();recv=Date.now();
+  try{const r=await fetch('/data?s='+S);D=await r.json();recv=Date.now();sensUi();
     const e=D.err;
     $('err').textContent=D.real>0?sgn(e,6)+' s':'-';$('err').style.color=css(Math.abs(e)<0.5?'--ok':e>0?'--fast':'--slow');
     $('errw').textContent=D.real>0?(e===0?'on time':(e>0?'ahead':'behind')+' by '+hmsp(e))+' after '+hms(D.real):'waiting for first beat';
@@ -115,8 +133,8 @@ async function tick(){
     bob();proj();
     $('n').textContent=D.n;$('nu').textContent=D.gaps?D.gaps+' gap(s) > 0.75 s':'no gaps';
     const ago=D.ago<0?'no beats yet':('last beat '+(D.ago/1000).toFixed(1)+' s ago');
-    $('status').textContent=!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
-      :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear');
+    $('status').textContent='Sensor '+S+': '+(!D.pol?'Waiting for the pendulum to swing (learning the sensor from the first few passes) - uptime '+Math.floor(D.up/60000)+' min'
+      :(D.stopped?'STOPPED - ':'Live - ')+ago+' - uptime '+Math.floor(D.up/60000)+' min - beam '+(D.beam?'BLOCKED':'clear'));
     render();live();
   }catch(e){$('status').textContent='connection lost, retrying...'}
 }
@@ -157,6 +175,6 @@ async function calFinish(){
   const v=prompt('How many mm did you move the bob?  + = down (away from pivot), - = up','');if(v===null)return;
   const r=await fetch('/cal/finish?mm='+encodeURIComponent(v.trim()));if(!r.ok)alert(await r.text());tick()}
 async function calCancel(){await fetch('/cal/cancel');tick()}
-async function rz(){if(!confirm('Re-zero: set the pendulum clock equal to real time from the next beat?'))return;await fetch('/reset');tick()}
+async function rz(){if(!confirm('Re-zero both sensors: set the pendulum clock equal to real time from the next beat? (The run log is kept.)'))return;await fetch('/reset');tick()}
 tick();setInterval(tick,1000);setInterval(live,100);
 </script></body></html>

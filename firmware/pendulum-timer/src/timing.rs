@@ -16,8 +16,9 @@ pub const BEAT_S: f64 = 0.5;
 pub const PERIOD_S: f64 = 2.0 * BEAT_S;
 /// Paper flag width, ~1/4 inch. Only used for the amplitude estimate.
 pub const FLAG_WIDTH_MM: f64 = 6.35;
-/// Pivot to flag distance. Only used to turn amplitude in mm into degrees.
-pub const FLAG_RADIUS_MM: f64 = 248.0;
+/// Pivot to flag distance (measured on the built pendulum). Only used to turn
+/// amplitude in mm into degrees.
+pub const FLAG_RADIUS_MM: f64 = 293.0;
 /// Edges closer together than this are treated as bounce and ignored (done in the ISR).
 pub const GLITCH_US: u64 = 2_000;
 /// Periods in the short-term rolling average.
@@ -79,6 +80,10 @@ pub struct Pass {
     pub rate_s_per_day: f64,
     pub err_s: f64,
     pub amp_deg: f64,
+    /// Middle of the blocked pulse, µs since boot.
+    pub mid_us: u64,
+    /// How long the beam was blocked, µs.
+    pub width_us: u64,
 }
 
 pub struct Timing {
@@ -174,7 +179,11 @@ impl Timing {
         } else {
             let b = self.block_t.take()?;
             let width = t_us.saturating_sub(b);
-            Some(self.pass(b + width / 2, width as f64 / 1000.0))
+            let mid = b + width / 2;
+            let mut p = self.pass(mid, width as f64 / 1000.0);
+            p.mid_us = mid;
+            p.width_us = width;
+            Some(p)
         }
     }
 
@@ -269,6 +278,8 @@ impl Timing {
         Pass {
             beats: self.beats,
             half_ms: self.last_half_ms,
+            mid_us: 0,
+            width_us: 0,
             period_ms: self.last_period_ms,
             blocked_ms,
             rate_s_per_day: self.rate30,
@@ -280,6 +291,11 @@ impl Timing {
     /// Average of the last few periods in ms (0 until the first period).
     pub fn avg_period_ms(&self) -> f64 {
         self.avg_period_ms
+    }
+
+    /// Passes seen since boot / re-zero.
+    pub fn beats(&self) -> u32 {
+        self.beats
     }
 
     pub fn stopped(&self, now_us: u64) -> bool {
